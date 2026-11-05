@@ -1,0 +1,60 @@
+import io
+import re
+import uuid
+import logging
+from datetime import datetime
+
+import qrcode
+
+from config import CRM_API_URL, CRM_API_KEY
+
+logger = logging.getLogger(__name__)
+
+
+def validate_email(email: str) -> bool:
+    return re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email) is not None
+
+
+def validate_phone(phone: str) -> bool:
+    cleaned = re.sub(r"[^\d+]", "", phone)
+    return 10 <= len(cleaned) <= 15
+
+
+def generate_qr(data: str) -> io.BytesIO:
+    qr = qrcode.make(data)
+    buf = io.BytesIO()
+    qr.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def build_ics(sessions: list[dict], date_str: str = "20261105") -> io.BytesIO:
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//VK Forum Bot//RU"]
+    for s in sessions:
+        start = datetime.strptime(f"{date_str} {s['start']}", "%Y%m%d %H:%M")
+        end = datetime.strptime(f"{date_str} {s['end']}", "%Y%m%d %H:%M")
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uuid.uuid4()}",
+            f"DTSTART:{start.strftime('%Y%m%dT%H%M%S')}",
+            f"DTEND:{end.strftime('%Y%m%dT%H%M%S')}",
+            f"SUMMARY:{s['title']}",
+            f"LOCATION:{s['hall']}",
+            f"DESCRIPTION:Спикер: {s.get('speaker', '')}",
+            "END:VEVENT",
+        ]
+    lines.append("END:VCALENDAR")
+    buf = io.BytesIO("\r\n".join(lines).encode("utf-8"))
+    buf.name = "my_schedule.ics"
+    return buf
+
+
+def crm_register(data: dict) -> str | None:
+    try:
+        # requests.post(f"{CRM_API_URL}/register", json=data,
+        #               headers={"X-API-Key": CRM_API_KEY}, timeout=10)
+        logger.info("CRM stub: %s", data)
+        return "demo-crm-" + uuid.uuid4().hex[:8]
+    except Exception as exc:
+        logger.error("CRM error: %s", exc)
+        return None
