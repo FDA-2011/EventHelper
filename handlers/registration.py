@@ -1,9 +1,10 @@
-from vkbottle.bot import Bot, Message, BotLabeler
+from vkbottle.bot import Message, BotLabeler
 from vkbottle import (
     BaseStateGroup, PhotoMessageUploader,
     GroupEventType, GroupTypes,
 )
 
+from bot_instance import bot
 from database import db
 from helpers import validate_email, validate_phone, generate_qr, crm_register
 
@@ -22,12 +23,12 @@ class RegForm(BaseStateGroup):
 
 
 @router.raw_event(GroupEventType.GROUP_JOIN, dataclass=GroupTypes.GroupJoin)
-async def on_group_join(event: GroupTypes.GroupJoin, bot: Bot):
+async def on_group_join(event: GroupTypes.GroupJoin):
     await bot.api.messages.send(
         peer_id=event.object.user_id,
         message=(
             "Добро пожаловать на форум! 👋\n"
-            "Я помогу с регистрацией, программой, вопросами спикерам и поддержкой.\n"
+            "Я помогу с регистрацией, программой и вопросами спикерам.\n"
             "Начните с /register или /start."
         ),
         random_id=0,
@@ -40,7 +41,7 @@ async def cmd_start(message: Message):
         "Команды:\n"
         "/register — регистрация\n"
         "/program — программа\n"
-        "/search (название доклада) — поиск докладов\n"
+        "/search — поиск докладов\n"
         "/my_schedule — экспорт в календарь\n"
         "/map — карта площадки\n"
         "/route — маршрут\n"
@@ -54,15 +55,16 @@ async def cmd_start(message: Message):
     )
 
 
-# ---------- Пошаговая регистрация (FSM) ----------
 @router.message(text="/register")
-async def reg_start(message: Message, bot: Bot):
+async def reg_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)
+    print(f"🟢 reg_start: state set for {message.peer_id}")
     await message.answer("Введите ваше ФИО:")
 
 
 @router.message(state=RegForm.full_name)
-async def reg_name(message: Message, bot: Bot):
+async def reg_name(message: Message):
+    print(f"🟢 reg_name fired, payload={message.state_peer.payload}")
     text = message.text.strip()
     if len(text.split()) < 2:
         await message.answer("Укажите минимум фамилию и имя.")
@@ -74,7 +76,7 @@ async def reg_name(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.organization)
-async def reg_org(message: Message, bot: Bot):
+async def reg_org(message: Message):
     p = message.state_peer.payload
     await bot.state_dispenser.set(
         message.peer_id, RegForm.region,
@@ -84,7 +86,7 @@ async def reg_org(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.region)
-async def reg_region(message: Message, bot: Bot):
+async def reg_region(message: Message):
     p = message.state_peer.payload
     await bot.state_dispenser.set(
         message.peer_id, RegForm.position,
@@ -95,7 +97,7 @@ async def reg_region(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.position)
-async def reg_position(message: Message, bot: Bot):
+async def reg_position(message: Message):
     p = message.state_peer.payload
     await bot.state_dispenser.set(
         message.peer_id, RegForm.email,
@@ -106,7 +108,7 @@ async def reg_position(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.email)
-async def reg_email(message: Message, bot: Bot):
+async def reg_email(message: Message):
     email = message.text.strip()
     if not validate_email(email):
         await message.answer("Некорректный e‑mail, попробуйте снова:")
@@ -121,7 +123,7 @@ async def reg_email(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.phone)
-async def reg_phone(message: Message, bot: Bot):
+async def reg_phone(message: Message):
     phone = message.text.strip()
     if not validate_phone(phone):
         await message.answer("Неверный формат телефона, попробуйте снова:")
@@ -142,7 +144,7 @@ async def reg_phone(message: Message, bot: Bot):
 
 
 @router.message(state=RegForm.confirm)
-async def reg_confirm(message: Message, bot: Bot):
+async def reg_confirm(message: Message):
     if message.text.strip().lower() not in ("да", "yes", "подтверждаю"):
         await bot.state_dispenser.delete(message.peer_id)
         await message.answer("Регистрация отменена. /register — начать заново.")
@@ -179,7 +181,7 @@ async def reg_confirm(message: Message, bot: Bot):
 
 
 @router.message(text="/cancel_reg")
-async def cancel_reg(message: Message, bot: Bot):
+async def cancel_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
     user = db.get_user(message.peer_id)
     if user:
@@ -188,7 +190,7 @@ async def cancel_reg(message: Message, bot: Bot):
 
 
 @router.message(text="/edit_reg")
-async def edit_reg(message: Message, bot: Bot):
+async def edit_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)
     await message.answer("Введите новые ФИО:")

@@ -1,8 +1,9 @@
 import logging
 
-from vkbottle.bot import Bot, Message, BotLabeler
+from vkbottle.bot import Message, BotLabeler
 from vkbottle import BaseStateGroup, Keyboard, Callback
 
+from bot_instance import bot
 from config import ADMIN_IDS, OPERATOR_PEER_ID
 from database import db
 
@@ -20,7 +21,6 @@ class Support(BaseStateGroup):
     waiting = "waiting"
 
 
-# ---------- Нетворкинг ----------
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/find "))
 async def find(message: Message):
     query = message.text[len("/find "):].strip()
@@ -50,9 +50,8 @@ async def find_usage(message: Message):
     await message.answer("Использование: /find <регион/компания>")
 
 
-# ---------- Опрос ----------
 @router.message(text="/poll")
-async def poll_start(message: Message, bot: Bot):
+async def poll_start(message: Message):
     session = db.get_first_session()
     if not session:
         await message.answer("Программа ещё не загружена.")
@@ -72,7 +71,7 @@ async def poll_start(message: Message, bot: Bot):
 
 
 @router.message(state=Feedback.rating)
-async def poll_rate(message: Message, bot: Bot):
+async def poll_rate(message: Message):
     payload = message.payload or {}
     if "rate" not in payload:
         await message.answer("Нажмите на кнопку с оценкой.")
@@ -87,7 +86,7 @@ async def poll_rate(message: Message, bot: Bot):
 
 
 @router.message(state=Feedback.comment)
-async def poll_comment(message: Message, bot: Bot):
+async def poll_comment(message: Message):
     text = message.text.strip()
     p = message.state_peer.payload
     await bot.state_dispenser.delete(message.peer_id)
@@ -104,9 +103,8 @@ async def poll_comment(message: Message, bot: Bot):
     await message.answer("✅ Спасибо за обратную связь!")
 
 
-# ---------- Админ: рассылка ----------
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/broadcast"))
-async def broadcast(message: Message, bot: Bot):
+async def broadcast(message: Message):
     if message.peer_id not in ADMIN_IDS:
         await message.answer("⛔ Недостаточно прав.")
         return
@@ -131,7 +129,7 @@ async def broadcast(message: Message, bot: Bot):
 
 
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/emergency"))
-async def emergency(message: Message, bot: Bot):
+async def emergency(message: Message):
     if message.peer_id not in ADMIN_IDS:
         await message.answer("⛔ Недостаточно прав.")
         return
@@ -151,7 +149,6 @@ async def emergency(message: Message, bot: Bot):
     await message.answer("Оповещение разослано.")
 
 
-# ---------- FAQ ----------
 @router.message(text="/faq")
 async def faq_list(message: Message):
     rows = db.select("faq")
@@ -165,9 +162,8 @@ async def faq_list(message: Message):
     await message.answer(text)
 
 
-# ---------- Поддержка ----------
 @router.message(text="/support")
-async def support_cmd(message: Message, bot: Bot):
+async def support_cmd(message: Message):
     await bot.state_dispenser.set(message.peer_id, Support.waiting)
     await message.answer(
         "Вы подключены к линии поддержки. Опишите вопрос — оператор ответит.\n"
@@ -176,7 +172,7 @@ async def support_cmd(message: Message, bot: Bot):
 
 
 @router.message(state=Support.waiting)
-async def forward_support(message: Message, bot: Bot):
+async def forward_support(message: Message):
     user = db.get_user(message.peer_id)
     if user:
         db.insert("support_messages", {
@@ -196,6 +192,6 @@ async def forward_support(message: Message, bot: Bot):
 
 
 @router.message(text="/end_support")
-async def end_support(message: Message, bot: Bot):
+async def end_support(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
     await message.answer("Вы вышли из режима поддержки.")

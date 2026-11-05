@@ -1,8 +1,13 @@
-from vkbottle.bot import Bot, Message, BotLabeler
+from io import BytesIO
+
+import requests
+from vkbottle.bot import Message, BotLabeler
 from vkbottle import (
-    BaseStateGroup, Keyboard, Callback, DocMessagesUploader,
+    BaseStateGroup, Keyboard, Callback,
+    DocMessagesUploader, PhotoMessageUploader,
 )
 
+from bot_instance import bot
 from config import VENUE_POIS
 from database import db
 from helpers import build_ics
@@ -17,7 +22,6 @@ class AskForm(BaseStateGroup):
     anonymity = "anonymity"
 
 
-# ---------- Программа ----------
 @router.message(text="/program")
 async def show_program(message: Message):
     rows = db.con.execute(
@@ -47,7 +51,6 @@ async def show_program(message: Message):
     await message.answer("\n".join(lines))
 
 
-# ---------- Поиск докладов ----------
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/search "))
 async def search(message: Message):
     query = message.text[len("/search "):].strip()
@@ -80,11 +83,12 @@ async def search_usage(message: Message):
     await message.answer("Использование: /search <слово>")
 
 
-# ---------- Экспорт расписания ----------
 @router.message(text="/my_schedule")
-async def my_schedule(message: Message, bot: Bot):
+async def my_schedule(message: Message):
     try:
         user = db.get_user(message.peer_id)
+        selected = []
+
         if user:
             sessions = db.con.execute(
                 "SELECT s.title, s.start_time, s.end_time, "
@@ -96,8 +100,6 @@ async def my_schedule(message: Message, bot: Bot):
                 "ORDER BY s.start_time",
             ).fetchall()
             selected = [dict(r) for r in sessions]
-        else:
-            selected = []
 
         if not selected:
             rows = db.con.execute(
@@ -127,15 +129,24 @@ async def my_schedule(message: Message, bot: Bot):
         buf = build_ics(payload)
         uploader = DocMessagesUploader(bot.api)
         doc = await uploader.upload(buf, peer_id=message.peer_id, title="my_schedule.ics")
-        await message.answer(
-            message="Ваше расписание (.ics)",
-            attachment=[str(doc)],
-        )
+        await message.answer(message="Ваше расписание (.ics)", attachment=doc)
     except Exception as e:
         await message.answer(f"⚠️ Не удалось сформировать .ics: {e}")
 
 
-# ---------- Карта площадки ----------
+async def _send_map_image(message: Message, url: str, caption: str):
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        buf = BytesIO(resp.content)
+        buf.name = "map.png"
+        uploader = PhotoMessageUploader(bot.api)
+        photo = await uploader.upload(buf, peer_id=message.peer_id)
+        await message.answer(message=caption, attachment=photo)
+    except Exception:
+        await message.answer(f"{caption}\n\n{url}")
+
+
 @router.message(text="/map")
 async def show_map(message: Message):
     pts = "~".join(f"{lon},{lat},pm2rdm" for lon, lat in VENUE_POIS.values())
@@ -143,10 +154,10 @@ async def show_map(message: Message):
         f"https://static-maps.yandex.ru/1.x/?"
         f"ll=37.617,55.755&z=17&size=650,450&l=map&pt={pts}"
     )
-    await message.answer(
-        message="🗺️ Карта площадки. Маршрут: /route <откуда> <куда>\n"
-                "Доступно: " + ", ".join(VENUE_POIS.keys()),
-        attachment=url,
+    await _send_map_image(
+        message, url,
+        "🗺️ Карта площадки. Маршрут: /route <откуда> <куда>\n"
+        "Доступно: " + ", ".join(VENUE_POIS.keys()),
     )
 
 
@@ -177,10 +188,7 @@ async def route(message: Message):
         f"&pl={pl}"
         f"&pt={ox},{oy},pm2gnm~{dx},{dy},pm2rdm"
     )
-    await message.answer(
-        message=f"🧭 Маршрут: {origin} → {dest}",
-        attachment=url,
-    )
+    await _send_map_image(message, url, f"🧭 Маршрут: {origin} → {dest}")
 
 
 @router.message(text="/route")
@@ -191,7 +199,6 @@ async def route_usage(message: Message):
     )
 
 
-# ---------- Спикеры ----------
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/speaker "))
 async def speaker_profile(message: Message):
     name = message.text[len("/speaker "):].strip()
@@ -216,15 +223,14 @@ async def speaker_usage(message: Message):
     await message.answer(f"Использование: /speaker <ФИО>\nДоступные спикеры: {names}")
 
 
-# ---------- Вопрос спикеру ----------
 @router.message(text="/ask")
-async def ask_start(message: Message, bot: Bot):
+async def ask_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, AskForm.speaker)
     await message.answer("Введите ФИО спикера:")
 
 
 @router.message(state=AskForm.speaker)
-async def ask_speaker(message: Message, bot: Bot):
+async def ask_speaker(message: Message):
     await bot.state_dispenser.set(
         message.peer_id, AskForm.question, speaker=message.text.strip()
     )
@@ -232,7 +238,7 @@ async def ask_speaker(message: Message, bot: Bot):
 
 
 @router.message(state=AskForm.question)
-async def ask_question(message: Message, bot: Bot):
+async def ask_question(message: Message):
     p = message.state_peer.payload
     await bot.state_dispenser.set(
         message.peer_id, AskForm.anonymity,
@@ -248,7 +254,7 @@ async def ask_question(message: Message, bot: Bot):
 
 
 @router.message(state=AskForm.anonymity)
-async def ask_anonymity(message: Message, bot: Bot):
+async def ask_anonymity(message: Message):
     p = message.state_peer.payload
     is_anon = (message.payload or {}).get("anon") == "yes"
     await bot.state_dispenser.delete(message.peer_id)
