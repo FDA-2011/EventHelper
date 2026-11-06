@@ -1,7 +1,7 @@
 vkbottle>=4.11.0
+streamlit
 qrcode[pil]
 requests
 python-dotenv
 cryptography
 loguru
-cryptography.fernet
