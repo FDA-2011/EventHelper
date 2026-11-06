@@ -1,7 +1,7 @@
 import logging
 
 from vkbottle.bot import Message, BotLabeler, MessageEvent
-from vkbottle import BaseStateGroup, Keyboard, Callback, GroupEventType
+from vkbottle import BaseStateGroup, Keyboard, Callback, GroupEventType, Text
 
 from bot_instance import bot
 from config import ADMIN_IDS, OPERATOR_PEER_ID
@@ -14,16 +14,25 @@ PENDING_POLLS: dict[int, dict] = {}
 LAST_SUPPORT_FROM: dict[int, int] = {}
 
 
+def _help_kb() -> str:
+    return Keyboard(one_time=False).add(Text("Помощь")).get_json()
+
+
 class Feedback(BaseStateGroup):
     comment = "comment"
 
 
 class Support(BaseStateGroup):
     waiting = "waiting"
+
+
 @router.message(text=["/find", "/find <query>"])
 async def find(message: Message, query: str = None):
     if not query:
-        await message.answer("Использование: /find <регион/компания/ФИО>")
+        await message.answer(
+            "Использование: /find <регион/компания/ФИО>",
+            keyboard=_help_kb(),
+        )
         return
 
     all_users = db.con.execute(
@@ -34,7 +43,8 @@ async def find(message: Message, query: str = None):
     if not all_users:
         await message.answer(
             "В базе пока нет подтверждённых участников. "
-            "Пройдите /register, чтобы вас могли найти."
+            "Пройдите /register, чтобы вас могли найти.",
+            keyboard=_help_kb(),
         )
         return
 
@@ -42,14 +52,15 @@ async def find(message: Message, query: str = None):
     rows = [
         r for r in all_users
         if q in (r["full_name"] or "").lower()
-        or q in (r["organization"] or "").lower()
-        or q in (r["region"] or "").lower()
+           or q in (r["organization"] or "").lower()
+           or q in (r["region"] or "").lower()
     ]
 
     if not rows:
         await message.answer(
             f"По запросу «{query}» никого не найдено. "
-            f"Всего в базе: {len(all_users)}."
+            f"Всего в базе: {len(all_users)}.",
+            keyboard=_help_kb(),
         )
         return
 
@@ -57,8 +68,11 @@ async def find(message: Message, query: str = None):
         f"Найдено: {len(rows)}\n" + "\n".join(
             f"• {r['full_name']} — {r['organization'] or '—'}, {r['region'] or '—'}"
             for r in rows
-        )
+        ),
+        keyboard=_help_kb(),
     )
+
+
 @router.message(text="/poll")
 async def poll_start(message: Message):
     sessions = db.con.execute(
@@ -110,7 +124,6 @@ async def poll_callback(event: MessageEvent):
         kb = Keyboard(inline=True)
         for i in range(1, 6):
             kb.add(Callback(
-
                 f"{i} ",
                 payload={"action": "poll_rate", "rate": i},
             ))
@@ -127,14 +140,18 @@ async def poll_callback(event: MessageEvent):
     poll_data = PENDING_POLLS.get(event.peer_id)
     if not poll_data:
         await event.show_snackbar("Сессия истекла")
-        await event.send_message("Ошибка: сессия истекла. Начните заново /poll")
+        await event.send_message(
+            "Ошибка: сессия истекла. Начните заново /poll",
+            keyboard=_help_kb(),
+        )
         return
 
     user = db.get_user(event.peer_id)
     if not user:
         await event.show_snackbar("Сначала /register")
         await event.send_message(
-            "Чтобы оценивать доклады, сначала пройдите /register"
+            "Чтобы оценивать доклады, сначала пройдите /register",
+            keyboard=_help_kb(),
         )
         return
 
@@ -164,7 +181,7 @@ async def poll_callback(event: MessageEvent):
 
     await event.show_snackbar(f"Оценка {score} сохранена")
     await event.send_message(
-        f"Оценка: {score}  сохранена.\n"
+        f"Оценка: {score} сохранена.\n"
         f"Комментарий (или «-» для пропуска):"
     )
 
@@ -179,12 +196,18 @@ async def poll_comment(message: Message):
 
     poll_data = PENDING_POLLS.pop(message.peer_id, None)
     if not poll_data:
-        await message.answer("Ошибка: данные об оценке не найдены.")
+        await message.answer(
+            "Ошибка: данные об оценке не найдены.",
+            keyboard=_help_kb(),
+        )
         return
 
     user = db.get_user(message.peer_id)
     if not user:
-        await message.answer("Вы не зарегистрированы, оценка не сохранена.")
+        await message.answer(
+            "Вы не зарегистрированы, оценка не сохранена.",
+            keyboard=_help_kb(),
+        )
         return
 
     comment = "" if text == "-" else text
@@ -208,14 +231,22 @@ async def poll_comment(message: Message):
             "comment": comment,
         })
 
-    await message.answer(" Спасибо за обратную связь!")
+    await message.answer(
+        "Спасибо за обратную связь!",
+        keyboard=_help_kb(),
+    )
+
+
 @router.message(text=["/broadcast <text>"])
 async def broadcast(message: Message, text: str = None):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer(" Недостаточно прав.")
+        await message.answer("Недостаточно прав.", keyboard=_help_kb())
         return
     if not text:
-        await message.answer("Использование: /broadcast <текст>")
+        await message.answer(
+            "Использование: /broadcast <текст>",
+            keyboard=_help_kb(),
+        )
         return
 
     users = db.get_confirmed_users()
@@ -230,16 +261,22 @@ async def broadcast(message: Message, text: str = None):
             logger.error("Broadcast %s: %s", u["vk_user_id"], e)
 
     db.insert("broadcasts", {"text_content": text, "status": "sent"})
-    await message.answer(f"Отправлено {sent} из {len(users)}.")
+    await message.answer(
+        f"Отправлено {sent} из {len(users)}.",
+        keyboard=_help_kb(),
+    )
 
 
 @router.message(text=["/emergency <text>"])
 async def emergency(message: Message, text: str = None):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer(" Недостаточно прав.")
+        await message.answer("Недостаточно прав.", keyboard=_help_kb())
         return
     if not text:
-        await message.answer("Использование: /emergency <текст>")
+        await message.answer(
+            "Использование: /emergency <текст>",
+            keyboard=_help_kb(),
+        )
         return
 
     users = db.get_confirmed_users()
@@ -250,7 +287,10 @@ async def emergency(message: Message, text: str = None):
             )
         except Exception:
             pass
-    await message.answer("Оповещение разослано.")
+    await message.answer(
+        "Оповещение разослано.",
+        keyboard=_help_kb(),
+    )
 
 
 @router.message(text="/admin_help")
@@ -258,7 +298,7 @@ async def admin_help(message: Message):
     if message.peer_id not in ADMIN_IDS:
         return
     await message.answer(
-        " Админ-команды:\n\n"
+        "Админ-команды:\n\n"
         "Поддержка:\n"
         "/support_list — активные обращения\n"
         "/reply <текст> — ответить последнему\n"
@@ -269,19 +309,25 @@ async def admin_help(message: Message):
         "Управление — через Streamlit-админку:\n"
         "• Пользователи, программа, спикеры\n"
         "• Вопросы на модерации\n"
-        "• Карта площадки"
+        "• Карта площадки",
+        keyboard=_help_kb(),
     )
+
+
 @router.message(text="/faq")
 async def faq_list(message: Message):
     rows = db.select("faq")
     if not rows:
-        await message.answer("FAQ пока не заполнен.")
+        await message.answer(
+            "FAQ пока не заполнен.",
+            keyboard=_help_kb(),
+        )
         return
-    text = " Частые вопросы:\n\n" + "\n\n".join(
+    text = "Частые вопросы:\n\n" + "\n\n".join(
         f"• {r['question']}: {r['answer']}" for r in rows
     )
-    text += "\n\n🆘 Поддержка: /support"
-    await message.answer(text)
+    text += "\n\nПоддержка: /support"
+    await message.answer(text, keyboard=_help_kb())
 
 
 @router.message(text="/support")
@@ -292,14 +338,16 @@ async def support_cmd(message: Message):
             "/support_list — все обращения\n"
             "/reply <текст> — ответить последнему обратившемуся\n"
             "/answer <peer_id> <текст> — ответить конкретному\n"
-            "/admin_help — все админ-команды"
+            "/admin_help — все админ-команды",
+            keyboard=_help_kb(),
         )
         return
 
     await bot.state_dispenser.set(message.peer_id, Support.waiting)
     await message.answer(
         "Вы подключены к линии поддержки. Опишите вопрос — оператор ответит.\n"
-        "Для выхода: /end_support"
+        "Для выхода: /end_support",
+        keyboard=_help_kb(),
     )
 
 
@@ -333,26 +381,41 @@ async def forward_support(message: Message):
     except Exception as e:
         logger.error("Support forward: %s", e)
 
-    await message.answer("Сообщение передано оператору. Ожидайте ответа.")
+    await message.answer(
+        "Сообщение передано оператору. Ожидайте ответа.",
+        keyboard=_help_kb(),
+    )
 
 
 @router.message(text="/end_support")
 async def end_support(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
-    await message.answer("Вы вышли из режима поддержки.")
+    await message.answer(
+        "Вы вышли из режима поддержки.",
+        keyboard=_help_kb(),
+    )
+
+
 async def _send_reply_to_user(admin_message: Message, target: int, text: str):
     if not text:
-        await admin_message.answer("Пустой текст ответа.")
+        await admin_message.answer(
+            "Пустой текст ответа.",
+            keyboard=_help_kb(),
+        )
         return
 
     try:
         await bot.api.messages.send(
             peer_id=target,
-            message=f" Ответ поддержки:\n\n{text}",
+            message=f"Ответ поддержки:\n\n{text}",
             random_id=0,
+            keyboard=_help_kb(),
         )
     except Exception as e:
-        await admin_message.answer(f" Не удалось отправить: {e}")
+        await admin_message.answer(
+            f"Не удалось отправить: {e}",
+            keyboard=_help_kb(),
+        )
         return
 
     user = db.get_user(target)
@@ -369,7 +432,10 @@ async def _send_reply_to_user(admin_message: Message, target: int, text: str):
         )
         db.con.commit()
 
-    await admin_message.answer(f" Ответ отправлен участнику {target}.")
+    await admin_message.answer(
+        f"Ответ отправлен участнику {target}.",
+        keyboard=_help_kb(),
+    )
 
 
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/reply "))
@@ -382,7 +448,8 @@ async def admin_reply(message: Message):
     if not target:
         await message.answer(
             "Нет активного диалога. Используйте /support_list, "
-            "а затем /answer <peer_id> <текст>."
+            "а затем /answer <peer_id> <текст>.",
+            keyboard=_help_kb(),
         )
         return
 
@@ -397,14 +464,18 @@ async def admin_answer(message: Message):
     body = message.text[len("/answer "):].strip()
     parts = body.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Использование: /answer <peer_id> <текст>")
+        await message.answer(
+            "Использование: /answer <peer_id> <текст>",
+            keyboard=_help_kb(),
+        )
         return
 
     try:
         target = int(parts[0])
     except ValueError:
         await message.answer(
-            "peer_id должен быть числом. Пример: /answer 638787485 Привет"
+            "peer_id должен быть числом. Пример: /answer 638787485 Привет",
+            keyboard=_help_kb(),
         )
         return
 
@@ -414,7 +485,7 @@ async def admin_answer(message: Message):
 @router.message(text="/support_list")
 async def admin_support_list(message: Message):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer(" Недостаточно прав.")
+        await message.answer("Недостаточно прав.", keyboard=_help_kb())
         return
 
     rows = db.con.execute(
@@ -430,13 +501,16 @@ async def admin_support_list(message: Message):
     ).fetchall()
 
     if not rows:
-        await message.answer("Нет новых сообщений от участников.")
+        await message.answer(
+            "Нет новых сообщений от участников.",
+            keyboard=_help_kb(),
+        )
         return
 
-    text = " Активные обращения:\n\n" + "\n\n".join(
-        f" {r['full_name']} (peer_id={r['vk_user_id']}) — {r['unread']} сообщ.\n"
+    text = "Активные обращения:\n\n" + "\n\n".join(
+        f"{r['full_name']} (peer_id={r['vk_user_id']}) — {r['unread']} сообщ.\n"
         f"   Последнее: {r['last_msg'][:80]}"
         for r in rows
     )
     text += "\n\nОтветить: /answer <peer_id> <текст>"
-    await message.answer(text)
+    await message.answer(text, keyboard=_help_kb())

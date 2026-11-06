@@ -4,7 +4,7 @@ from io import BytesIO
 import requests
 from vkbottle.bot import Message, BotLabeler, MessageEvent
 from vkbottle import (
-    BaseStateGroup, Keyboard, Callback,
+    BaseStateGroup, Keyboard, Callback, Text,
     DocMessagesUploader, PhotoMessageUploader, GroupEventType,
 )
 
@@ -19,9 +19,15 @@ PENDING_QUESTIONS: dict[int, dict] = {}
 VENUE_MAP_PATH = "venue_map.jpg"
 
 
+def _help_kb() -> str:
+    return Keyboard(one_time=False).add(Text("Помощь")).get_json()
+
+
 class AskForm(BaseStateGroup):
     speaker = "speaker"
     question = "question"
+
+
 @router.message(text="/program")
 async def show_program(message: Message):
     rows = db.con.execute(
@@ -33,28 +39,31 @@ async def show_program(message: Message):
         "ORDER BY s.start_time"
     ).fetchall()
     if not rows:
-        await message.answer("Программа пока пуста.")
+        await message.answer("Программа пока пуста.", keyboard=_help_kb())
         return
 
     halls: dict[str, list] = {}
     for r in rows:
         halls.setdefault(r["hall"] or "—", []).append(dict(r))
 
-    lines = [" Программа форума\n"]
+    lines = ["Программа форума\n"]
     for hall, sessions in halls.items():
-        lines.append(f" {hall}")
+        lines.append(hall)
         for s in sessions:
             start = s["start_time"].split(" ")[1][:5] if " " in s["start_time"] else s["start_time"]
             end = s["end_time"].split(" ")[1][:5] if " " in s["end_time"] else s["end_time"]
             lines.append(f"  {start}–{end} — {s['title']} ({s['speaker'] or 'Нет спикера'})")
         lines.append("")
-    await message.answer("\n".join(lines))
+    await message.answer("\n".join(lines), keyboard=_help_kb())
 
 
 @router.message(text=["/search", "/search <query>"])
 async def search(message: Message, query: str = None):
     if not query:
-        await message.answer("Использование: /search <слово>")
+        await message.answer(
+            "Использование: /search <слово>",
+            keyboard=_help_kb(),
+        )
         return
 
     try:
@@ -69,33 +78,40 @@ async def search(message: Message, query: str = None):
         ).fetchall()
 
         if not all_sessions:
-            await message.answer("Программа пока пуста.")
+            await message.answer("Программа пока пуста.", keyboard=_help_kb())
             return
 
         q = query.lower().strip()
         rows = [
             r for r in all_sessions
             if q in (r["title"] or "").lower()
-            or q in (r["speaker"] or "").lower()
-            or q in (r["hall"] or "").lower()
-            or q in (r["track"] or "").lower()
+               or q in (r["speaker"] or "").lower()
+               or q in (r["hall"] or "").lower()
+               or q in (r["track"] or "").lower()
         ]
 
         if not rows:
-            await message.answer(f"По запросу «{query}» ничего не найдено.")
+            await message.answer(
+                f"По запросу «{query}» ничего не найдено.",
+                keyboard=_help_kb(),
+            )
             return
 
         await message.answer(
-            " Результаты:\n" + "\n".join(
+            "Результаты:\n" + "\n".join(
                 f"• {r['title']} — {r['speaker'] or 'Нет спикера'} "
                 f"({r['start_time'].split(' ')[1][:5] if ' ' in r['start_time'] else r['start_time']}, "
                 f"{r['hall'] or 'Зал не указан'})"
                 for r in rows
-            )
+            ),
+            keyboard=_help_kb(),
         )
     except Exception as e:
         print(f"Ошибка поиска: {e}")
-        await message.answer(" Ошибка при поиске докладов.")
+        await message.answer(
+            "Ошибка при поиске докладов.",
+            keyboard=_help_kb(),
+        )
 
 
 @router.message(text="/my_schedule")
@@ -130,7 +146,7 @@ async def my_schedule(message: Message):
             selected = [dict(r) for r in rows]
 
         if not selected:
-            await message.answer("Расписание пока пусто.")
+            await message.answer("Расписание пока пусто.", keyboard=_help_kb())
             return
 
         payload = [
@@ -146,14 +162,24 @@ async def my_schedule(message: Message):
         buf = build_ics(payload)
         uploader = DocMessagesUploader(bot.api)
         doc = await uploader.upload(buf, peer_id=message.peer_id, title="my_schedule.ics")
-        await message.answer(message="Ваше расписание (.ics)", attachment=doc)
+        await message.answer(
+            message="Ваше расписание (.ics)",
+            attachment=doc,
+            keyboard=_help_kb(),
+        )
     except Exception as e:
-        await message.answer(f" Не удалось сформировать .ics: {e}")
+        await message.answer(
+            f"Не удалось сформировать .ics: {e}",
+            keyboard=_help_kb(),
+        )
+
+
 @router.message(text="/map")
 async def show_map(message: Message):
     if not os.path.exists(VENUE_MAP_PATH):
         await message.answer(
-            " Карта площадки ещё не загружена администратором."
+            "Карта площадки ещё не загружена администратором.",
+            keyboard=_help_kb(),
         )
         return
 
@@ -163,26 +189,42 @@ async def show_map(message: Message):
         buf.name = "map.jpg"
         uploader = PhotoMessageUploader(bot.api)
         photo = await uploader.upload(buf, peer_id=message.peer_id)
-        await message.answer(message=" Карта площадки", attachment=photo)
+        await message.answer(
+            message="Карта площадки",
+            attachment=photo,
+            keyboard=_help_kb(),
+        )
     except Exception as e:
-        await message.answer(f" Не удалось отправить карту: {e}")
+        await message.answer(
+            f"Не удалось отправить карту: {e}",
+            keyboard=_help_kb(),
+        )
+
+
 @router.message(text=["/speaker", "/speaker <query>"])
 async def speaker_profile(message: Message, query: str = None):
     if not query:
         rows = db.select("speakers")
         names = ", ".join(r["full_name"] for r in rows) if rows else "—"
-        await message.answer(f"Использование: /speaker <ФИО>\nДоступные спикеры: {names}")
+        await message.answer(
+            f"Использование: /speaker <ФИО>\nДоступные спикеры: {names}",
+            keyboard=_help_kb(),
+        )
         return
 
     name = query.strip()
     rows = db.select("speakers", {"full_name": name})
     if not rows:
-        await message.answer(f"Спикер «{name}» не найден.")
+        await message.answer(
+            f"Спикер «{name}» не найден.",
+            keyboard=_help_kb(),
+        )
         return
     s = rows[0]
     await message.answer(
-        f" {s['full_name']}\n\n {s.get('bio') or '—'}\n\n"
-        f" Соцсети: {s.get('social_links') or '—'}"
+        f"{s['full_name']}\n\n{s.get('bio') or '—'}\n\n"
+        f"Соцсети: {s.get('social_links') or '—'}",
+        keyboard=_help_kb(),
     )
 
 
@@ -241,7 +283,10 @@ async def handle_anonymity_callback(event: MessageEvent):
 
     p = PENDING_QUESTIONS.pop(event.peer_id, None)
     if not p:
-        await event.send_message("Ошибка: сессия истекла. Начните заново /ask")
+        await event.send_message(
+            "Ошибка: сессия истекла. Начните заново /ask",
+            keyboard=_help_kb(),
+        )
         return
 
     is_anon = payload.get("anon") == "yes"
@@ -250,7 +295,10 @@ async def handle_anonymity_callback(event: MessageEvent):
 
     speaker_rows = db.select("speakers", {"full_name": speaker_name})
     if not speaker_rows:
-        await event.send_message("Спикер не найден — вопрос не сохранён.")
+        await event.send_message(
+            "Спикер не найден — вопрос не сохранён.",
+            keyboard=_help_kb(),
+        )
         return
 
     session_row = db.con.execute(
@@ -258,7 +306,10 @@ async def handle_anonymity_callback(event: MessageEvent):
         (speaker_rows[0]["id"],),
     ).fetchone()
     if not session_row:
-        await event.send_message("У спикера нет докладов в программе.")
+        await event.send_message(
+            "У спикера нет докладов в программе.",
+            keyboard=_help_kb(),
+        )
         return
 
     user = db.get_user(event.user_id)
@@ -270,5 +321,5 @@ async def handle_anonymity_callback(event: MessageEvent):
         "status": "pending",
     })
 
-    confirm_text = " Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
-    await event.send_message(confirm_text)
+    confirm_text = "Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
+    await event.send_message(confirm_text, keyboard=_help_kb())

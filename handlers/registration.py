@@ -36,6 +36,10 @@ def _user_status(peer_id: int) -> str | None:
     return user.get("registration_status") if user else None
 
 
+def _help_kb() -> str:
+    return Keyboard(one_time=False).add(Text("Помощь")).get_json()
+
+
 def _block_matcher(m: Message) -> bool:
     peer_id = m.peer_id
     status = _user_status(peer_id)
@@ -82,6 +86,8 @@ async def block_unregistered(message: Message):
         "Отправьте /register или нажмите кнопку ниже.",
         keyboard=kb.get_json(),
     )
+
+
 HELP_TEXT = (
     " Все команды бота:\n\n"
     " /program — программа форума\n"
@@ -126,6 +132,8 @@ def _pending_keyboard() -> str:
     kb = Keyboard(one_time=False)
     kb.add(Text("/my_qr")).add(Text("/cancel_reg"))
     return kb.get_json()
+
+
 @router.message(text=["/start", "начать"])
 async def cmd_start(message: Message):
     status = _user_status(message.peer_id)
@@ -144,7 +152,7 @@ async def cmd_start(message: Message):
     )
 
 
-@router.message(text=["/help", "help", "помощь"])
+@router.message(text=["/help", "help", "помощь", "Помощь"])
 async def cmd_help(message: Message):
     status = _user_status(message.peer_id)
 
@@ -161,10 +169,17 @@ async def cmd_help(message: Message):
         " Для использования бота пройдите регистрацию.",
         keyboard=kb.get_json(),
     )
+
+
 @router.message(text="/cancel")
 async def cancel_state(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
-    await message.answer("Действие отменено. Список команд: /help")
+    await message.answer(
+        "Действие отменено. Список команд: /help",
+        keyboard=_help_kb(),
+    )
+
+
 class RegForm(BaseStateGroup):
     full_name = "full_name"
     organization = "organization"
@@ -180,11 +195,12 @@ async def on_group_join(event: GroupTypes.GroupJoin):
     await bot.api.messages.send(
         peer_id=event.object.user_id,
         message=(
-            "Добро пожаловать на форум! \n\n"
-            " Для использования бота нужна регистрация.\n"
+            "Добро пожаловать на форум!\n\n"
+            "Для использования бота нужна регистрация.\n"
             "Пройдите её командой /register."
         ),
         random_id=0,
+        keyboard=_help_kb(),
     )
 
 
@@ -197,18 +213,20 @@ async def reg_start(message: Message):
 
         if status == "confirmed":
             await message.answer(
-                " Вы уже зарегистрированы.\n\n"
-                " Получить QR-код: /my_qr\n"
-                " Изменить данные: /edit_reg"
+                "Вы уже зарегистрированы.\n\n"
+                "Получить QR-код: /my_qr\n"
+                "Изменить данные: /edit_reg",
+                keyboard=_help_kb(),
             )
             return
 
         if status == "pending":
             await message.answer(
-                "⏳ Ваша заявка уже на рассмотрении.\n\n"
-                " Статус: /my_qr\n"
-                " Отменить: /cancel_reg\n"
-                " Изменить данные: /edit_reg"
+                "Ваша заявка уже на рассмотрении.\n\n"
+                "Статус: /my_qr\n"
+                "Отменить: /cancel_reg\n"
+                "Изменить данные: /edit_reg",
+                keyboard=_help_kb(),
             )
             return
 
@@ -370,12 +388,15 @@ async def reg_confirm(message: Message):
         " Проверить статус: /my_qr\n"
         f"Номер заявки: {crm_id}"
     )
+
+
 @router.message(text="/my_qr")
 async def my_qr(message: Message):
     user = db.get_user(message.peer_id)
     if not user:
         await message.answer(
-            "Вы ещё не регистрировались.\nПройдите регистрацию: /register"
+            "Вы ещё не регистрировались.\nПройдите регистрацию: /register",
+            keyboard=_help_kb(),
         )
         return
 
@@ -383,15 +404,17 @@ async def my_qr(message: Message):
 
     if status == "pending":
         await message.answer(
-            "⏳ Ваша заявка ещё на рассмотрении.\n"
-            "Мы уведомим вас, когда её одобрят."
+            "Ваша заявка ещё на рассмотрении.\n"
+            "Мы уведомим вас, когда её одобрят.",
+            keyboard=_help_kb(),
         )
         return
 
     if status == "cancelled":
         await message.answer(
-            " Ваша заявка отменена или отклонена.\n"
-            "Пройти регистрацию заново: /register"
+            "Ваша заявка отменена или отклонена.\n"
+            "Пройти регистрацию заново: /register",
+            keyboard=_help_kb(),
         )
         return
 
@@ -399,7 +422,8 @@ async def my_qr(message: Message):
         qr_data = user.get("qr_code_data")
         if not qr_data:
             await message.answer(
-                " QR-код не найден. Обратитесь к администратору."
+                "QR-код не найден. Обратитесь к администратору.",
+                keyboard=_help_kb(),
             )
             return
 
@@ -408,35 +432,51 @@ async def my_qr(message: Message):
             uploader = PhotoMessageUploader(bot.api)
             photo = await uploader.upload(qr_buf, peer_id=message.peer_id)
             await message.answer(
-                message=" Ваш QR-код для бейджа:",
+                message="Ваш QR-код для бейджа:",
                 attachment=photo,
+                keyboard=_help_kb(),
             )
         except Exception as e:
-            await message.answer(f" Не удалось сформировать QR: {e}")
+            await message.answer(
+                f"Не удалось сформировать QR: {e}",
+                keyboard=_help_kb(),
+            )
         return
 
     await message.answer(
-        "Не удалось определить статус регистрации. Обратитесь к администратору."
+        "Не удалось определить статус регистрации. Обратитесь к администратору.",
+        keyboard=_help_kb(),
     )
+
+
 @router.message(text="/cancel_reg")
 async def cancel_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
 
     user = db.get_user(message.peer_id)
     if not user:
-        await message.answer("У вас нет активной заявки.")
+        await message.answer(
+            "У вас нет активной заявки.",
+            keyboard=_help_kb(),
+        )
         return
 
     status = user.get("registration_status")
 
     if status == "cancelled":
         await message.answer(
-            "Заявка уже отменена.\nПройти регистрацию заново: /register"
+            "Заявка уже отменена.\nПройти регистрацию заново: /register",
+            keyboard=_help_kb(),
         )
         return
 
     db.update("users", {"registration_status": "cancelled"}, {"id": user["id"]})
-    await message.answer(" Заявка отменена.\n\nПройти заново: /register")
+    await message.answer(
+        "Заявка отменена.\n\nПройти заново: /register",
+        keyboard=_help_kb(),
+    )
+
+
 @router.message(text="/edit_reg")
 async def edit_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
