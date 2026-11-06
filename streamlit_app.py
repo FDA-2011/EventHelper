@@ -10,6 +10,7 @@ st.set_page_config(page_title="Админ-панель Бота", page_icon="�
 
 VK_TOKEN = os.getenv("VK_BOT_TOKEN", "")
 DB_PATH = "bot.db"
+VENUE_MAP_PATH = "venue_map.jpg"
 
 
 def get_db():
@@ -19,13 +20,21 @@ def get_db():
 
 
 def send_vk_message(user_id: int, text: str):
-    if not VK_TOKEN: return False, "Токен не найден"
+    if not VK_TOKEN:
+        return False, "Токен не найден"
     url = "https://api.vk.com/method/messages.send"
-    payload = {"user_id": user_id, "message": text, "random_id": 0, "access_token": VK_TOKEN, "v": "5.199"}
+    payload = {
+        "user_id": user_id,
+        "message": text,
+        "random_id": 0,
+        "access_token": VK_TOKEN,
+        "v": "5.199",
+    }
     try:
         r = requests.post(url, data=payload, timeout=3)
         res = r.json()
-        if "error" in res: return False, res["error"].get("error_msg", "Ошибка VK API")
+        if "error" in res:
+            return False, res["error"].get("error_msg", "Ошибка VK API")
         return True, "OK"
     except Exception as e:
         return False, str(e)
@@ -45,29 +54,53 @@ with st.sidebar:
 
 menu = st.sidebar.radio(
     "Выберите раздел:",
-    ["📊 Дашборд", "👥 Пользователи", "❓ Вопросы", "📅 Программа", "🎤 Спикеры", "📍 Локации", "⭐ Отзывы", "💬 FAQ",
-     "📢 Рассылка"]
+    [
+        "📊 Дашборд",
+        "👥 Пользователи",
+        "❓ Вопросы",
+        "📅 Программа",
+        "🎤 Спикеры",
+        "📍 Локации",
+        "🗺️ Карта",
+        "⭐ Отзывы",
+        "💬 FAQ",
+        "📢 Рассылка",
+    ],
 )
 
 conn = get_db()
 
+# ============================================================
+# Дашборд
+# ============================================================
 if menu == "📊 Дашборд":
     st.header("Общая статистика")
-    total_users = conn.execute("SELECT COUNT(*) FROM users WHERE registration_status = 'confirmed'").fetchone()[0]
-    pending_users = conn.execute("SELECT COUNT(*) FROM users WHERE registration_status = 'pending'").fetchone()[0]
-    total_questions = conn.execute("SELECT COUNT(*) FROM questions WHERE status = 'pending'").fetchone()[0]
+    total_users = conn.execute(
+        "SELECT COUNT(*) FROM users WHERE registration_status = 'confirmed'"
+    ).fetchone()[0]
+    pending_users = conn.execute(
+        "SELECT COUNT(*) FROM users WHERE registration_status = 'pending'"
+    ).fetchone()[0]
+    total_questions = conn.execute(
+        "SELECT COUNT(*) FROM questions WHERE status = 'pending'"
+    ).fetchone()[0]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("✅ Подтвержденные участники", total_users)
     col2.metric("⏳ Ожидают одобрения", pending_users)
     col3.metric("❓ Вопросов на модерации", total_questions)
 
+# ============================================================
+# Пользователи
+# ============================================================
 elif menu == "👥 Пользователи":
     st.header("Управление пользователями")
     tab1, tab2 = st.tabs(["⏳ На модерации", "✅ Все участники"])
 
     with tab1:
-        pending = conn.execute("SELECT * FROM users WHERE registration_status = 'pending'").fetchall()
+        pending = conn.execute(
+            "SELECT * FROM users WHERE registration_status = 'pending'"
+        ).fetchall()
         if not pending:
             st.info("Нет пользователей, ожидающих одобрения.")
         else:
@@ -77,26 +110,44 @@ elif menu == "👥 Пользователи":
                     st.write(f"Email: {user['email']} | Тел: {user['phone']}")
                     col1, col2 = st.columns([1, 10])
                     if col1.button("Одобрить", key=f"app_{user['id']}"):
-                        conn.execute("UPDATE users SET registration_status = 'confirmed' WHERE id = ?", (user["id"],))
+                        conn.execute(
+                            "UPDATE users SET registration_status = 'confirmed' WHERE id = ?",
+                            (user["id"],),
+                        )
                         conn.commit()
-                        send_vk_message(user["vk_user_id"], "🎉 Ваша регистрация одобрена! Получите QR-код: /my_qr")
+                        send_vk_message(
+                            user["vk_user_id"],
+                            "🎉 Ваша регистрация одобрена! Получите QR-код: /my_qr",
+                        )
                         st.rerun()
                     if col2.button("Отклонить", key=f"rej_{user['id']}", type="primary"):
-                        conn.execute("UPDATE users SET registration_status = 'cancelled' WHERE id = ?", (user["id"],))
+                        conn.execute(
+                            "UPDATE users SET registration_status = 'cancelled' WHERE id = ?",
+                            (user["id"],),
+                        )
                         conn.commit()
                         st.rerun()
                     st.divider()
 
     with tab2:
         users = pd.read_sql_query(
-            "SELECT id, vk_user_id, full_name, organization, registration_status FROM users ORDER BY full_name", conn)
+            "SELECT id, vk_user_id, full_name, organization, registration_status "
+            "FROM users ORDER BY full_name",
+            conn,
+        )
         st.dataframe(users, width="stretch")
 
+# ============================================================
+# Вопросы
+# ============================================================
 elif menu == "❓ Вопросы":
     st.header("Модерация и ответы на вопросы")
     questions = conn.execute(
-        "SELECT q.id, q.question_text, q.is_anonymous, q.user_id, sp.full_name AS speaker "
-        "FROM questions q LEFT JOIN sessions s ON q.session_id = s.id LEFT JOIN speakers sp ON s.speaker_id = sp.id "
+        "SELECT q.id, q.question_text, q.is_anonymous, q.user_id, "
+        "       sp.full_name AS speaker "
+        "FROM questions q "
+        "LEFT JOIN sessions s ON q.session_id = s.id "
+        "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
         "WHERE q.status = 'pending'"
     ).fetchall()
 
@@ -113,23 +164,36 @@ elif menu == "❓ Вопросы":
                     answer = st.text_area("Текст ответа", key=f"ans_{q['id']}")
                     if st.button("Отправить", key=f"btn_ans_{q['id']}"):
                         if answer:
-                            user_row = conn.execute("SELECT vk_user_id FROM users WHERE id = ?",
-                                                    (q['user_id'],)).fetchone()
+                            user_row = conn.execute(
+                                "SELECT vk_user_id FROM users WHERE id = ?",
+                                (q["user_id"],),
+                            ).fetchone()
                             if user_row:
-                                send_vk_message(user_row["vk_user_id"],
-                                                f"Ответ на ваш вопрос спикеру {q['speaker']}:\n\n{answer}")
-                                conn.execute("UPDATE questions SET status = 'answered', answer_text = ? WHERE id = ?",
-                                             (answer, q["id"]))
+                                send_vk_message(
+                                    user_row["vk_user_id"],
+                                    f"Ответ на ваш вопрос спикеру {q['speaker']}:\n\n{answer}",
+                                )
+                                conn.execute(
+                                    "UPDATE questions SET status = 'answered', "
+                                    "answer_text = ? WHERE id = ?",
+                                    (answer, q["id"]),
+                                )
                                 conn.commit()
                                 st.success("Ответ отправлен!")
                                 st.rerun()
 
                 if st.button("❌ Отклонить / Скрыть вопрос", key=f"rq_{q['id']}"):
-                    conn.execute("UPDATE questions SET status = 'rejected' WHERE id = ?", (q["id"],))
+                    conn.execute(
+                        "UPDATE questions SET status = 'rejected' WHERE id = ?",
+                        (q["id"],),
+                    )
                     conn.commit()
                     st.rerun()
                 st.divider()
 
+# ============================================================
+# Спикеры
+# ============================================================
 elif menu == "🎤 Спикеры":
     st.header("Управление спикерами")
     with st.form("add_speaker"):
@@ -138,8 +202,10 @@ elif menu == "🎤 Спикеры":
         social = st.text_input("Соцсети (необязательно)")
         if st.form_submit_button("Добавить спикера"):
             if full_name:
-                conn.execute("INSERT INTO speakers (full_name, bio, social_links) VALUES (?, ?, ?)",
-                             (full_name, bio, social))
+                conn.execute(
+                    "INSERT INTO speakers (full_name, bio, social_links) VALUES (?, ?, ?)",
+                    (full_name, bio, social),
+                )
                 conn.commit()
                 st.success(f"Спикер {full_name} добавлен!")
                 st.rerun()
@@ -147,13 +213,19 @@ elif menu == "🎤 Спикеры":
     speakers = pd.read_sql_query("SELECT id, full_name, bio FROM speakers", conn)
     st.dataframe(speakers, width="stretch")
 
+# ============================================================
+# Локации
+# ============================================================
 elif menu == "📍 Локации":
     st.header("Управление локациями (залами)")
     with st.form("add_location"):
         loc_name = st.text_input("Название зала (например, 'Зал А' или 'Коворкинг')")
         if st.form_submit_button("Добавить"):
             if loc_name:
-                conn.execute("INSERT INTO locations (name, type) VALUES (?, 'hall')", (loc_name,))
+                conn.execute(
+                    "INSERT INTO locations (name, type) VALUES (?, 'hall')",
+                    (loc_name,),
+                )
                 conn.commit()
                 st.success(f"Локация {loc_name} добавлена!")
                 st.rerun()
@@ -167,30 +239,75 @@ elif menu == "📍 Локации":
             conn.commit()
             st.rerun()
 
+# ============================================================
+# Карта площадки (загрузка/замена/удаление)
+# ============================================================
+elif menu == "🗺️ Карта":
+    st.header("Карта площадки")
+    st.write(
+        "Загруженная карта будет показываться пользователям бота по команде `/map`. "
+        "Перезапуск бота не требуется — файл читается при каждом запросе."
+    )
+
+    if os.path.exists(VENUE_MAP_PATH):
+        st.image(VENUE_MAP_PATH, caption="Текущая карта площадки", width="stretch")
+        size_kb = os.path.getsize(VENUE_MAP_PATH) // 1024
+        st.caption(f"Файл: `{VENUE_MAP_PATH}` · Размер: {size_kb} КБ")
+    else:
+        st.info("Карта ещё не загружена.")
+
+    uploaded = st.file_uploader(
+        "Загрузить новую карту",
+        type=["jpg", "jpeg", "png", "webp"],
+    )
+    if uploaded is not None:
+        with open(VENUE_MAP_PATH, "wb") as f:
+            f.write(uploaded.read())
+        st.success("✅ Карта сохранена. Пользователи увидят её при следующем `/map`.")
+        st.rerun()
+
+    if os.path.exists(VENUE_MAP_PATH):
+        if st.button("🗑️ Удалить карту"):
+            os.remove(VENUE_MAP_PATH)
+            st.success("Карта удалена.")
+            st.rerun()
+
+# ============================================================
+# Отзывы
+# ============================================================
 elif menu == "⭐ Отзывы":
     st.header("Оценки докладов")
     feedbacks = pd.read_sql_query(
-        "SELECT f.id, s.title AS session, u.full_name AS user, f.rating, f.comment "
+        "SELECT f.id, s.title AS session, u.full_name AS user, "
+        "       f.rating, f.comment "
         "FROM feedback f "
         "LEFT JOIN sessions s ON f.target_id = s.id "
         "LEFT JOIN users u ON f.user_id = u.id "
-        "ORDER BY f.created_at DESC", conn
+        "ORDER BY f.created_at DESC",
+        conn,
     )
     st.dataframe(feedbacks, width="stretch")
 
+# ============================================================
+# Программа
+# ============================================================
 elif menu == "📅 Программа":
     st.header("Управление расписанием")
     with st.expander("➕ Добавить новый доклад", expanded=False):
         speakers = conn.execute("SELECT id, full_name FROM speakers").fetchall()
-        speaker_options = {f"{s['full_name']}": s['id'] for s in speakers}
+        speaker_options = {f"{s['full_name']}": s["id"] for s in speakers}
 
         locations = conn.execute("SELECT id, name FROM locations").fetchall()
-        loc_options = {f"{l['name']}": l['id'] for l in locations}
+        loc_options = {f"{l['name']}": l["id"] for l in locations}
 
         with st.form("add_session"):
             title = st.text_input("Название доклада")
-            speaker_name = st.selectbox("Спикер", options=["Без спикера"] + list(speaker_options.keys()))
-            loc_name = st.selectbox("Локация (зал)", options=["Без локации"] + list(loc_options.keys()))
+            speaker_name = st.selectbox(
+                "Спикер", options=["Без спикера"] + list(speaker_options.keys())
+            )
+            loc_name = st.selectbox(
+                "Локация (зал)", options=["Без локации"] + list(loc_options.keys())
+            )
             col1, col2 = st.columns(2)
             start_t = col1.text_input("Начало (ГГГГ-ММ-ДД ЧЧ:ММ)", value="2026-11-05 10:00")
             end_t = col2.text_input("Конец (ГГГГ-ММ-ДД ЧЧ:ММ)", value="2026-11-05 11:00")
@@ -199,28 +316,36 @@ elif menu == "📅 Программа":
                 sp_id = speaker_options.get(speaker_name) if speaker_name != "Без спикера" else None
                 loc_id = loc_options.get(loc_name) if loc_name != "Без локации" else None
                 conn.execute(
-                    "INSERT INTO sessions (title, start_time, end_time, speaker_id, location_id) VALUES (?, ?, ?, ?, ?)",
-                    (title, start_t, end_t, sp_id, loc_id)
+                    "INSERT INTO sessions (title, start_time, end_time, speaker_id, location_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (title, start_t, end_t, sp_id, loc_id),
                 )
                 conn.commit()
                 st.success("Доклад добавлен!")
                 st.rerun()
 
     sessions = pd.read_sql_query(
-        "SELECT s.id, s.title, sp.full_name as speaker, l.name as hall, s.start_time, s.end_time "
+        "SELECT s.id, s.title, sp.full_name as speaker, l.name as hall, "
+        "       s.start_time, s.end_time "
         "FROM sessions s "
         "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
         "LEFT JOIN locations l ON s.location_id = l.id "
-        "ORDER BY s.start_time", conn
+        "ORDER BY s.start_time",
+        conn,
     )
     if not sessions.empty:
         st.dataframe(sessions, width="stretch")
-        delete_id = st.selectbox("Выберите ID доклада для удаления", sessions["id"].tolist())
+        delete_id = st.selectbox(
+            "Выберите ID доклада для удаления", sessions["id"].tolist()
+        )
         if st.button("🗑️ Удалить доклад"):
             conn.execute("DELETE FROM sessions WHERE id = ?", (delete_id,))
             conn.commit()
             st.rerun()
 
+# ============================================================
+# FAQ
+# ============================================================
 elif menu == "💬 FAQ":
     st.header("Частые вопросы")
     with st.form("add_faq"):
@@ -228,7 +353,9 @@ elif menu == "💬 FAQ":
         a = st.text_area("Ответ")
         if st.form_submit_button("Добавить"):
             if q and a:
-                conn.execute("INSERT INTO faq (question, answer) VALUES (?, ?)", (q, a))
+                conn.execute(
+                    "INSERT INTO faq (question, answer) VALUES (?, ?)", (q, a)
+                )
                 conn.commit()
                 st.rerun()
     faqs = pd.read_sql_query("SELECT id, question, answer FROM faq", conn)
@@ -240,18 +367,24 @@ elif menu == "💬 FAQ":
             conn.commit()
             st.rerun()
 
+# ============================================================
+# Рассылка
+# ============================================================
 elif menu == "📢 Рассылка":
     st.header("Массовая рассылка")
     text = st.text_area("Текст сообщения", height=150)
     if st.button("🚀 Отправить всем", type="primary"):
         if text:
-            users = conn.execute("SELECT vk_user_id FROM users WHERE registration_status = 'confirmed'").fetchall()
+            users = conn.execute(
+                "SELECT vk_user_id FROM users WHERE registration_status = 'confirmed'"
+            ).fetchall()
             with st.spinner(f"Отправляем {len(users)} чел..."):
                 progress = st.progress(0)
                 success = 0
                 for i, u in enumerate(users):
                     ok, _ = send_vk_message(u["vk_user_id"], text)
-                    if ok: success += 1
+                    if ok:
+                        success += 1
                     progress.progress((i + 1) / len(users))
                 st.success(f"✅ Отправлено {success} из {len(users)}")
 

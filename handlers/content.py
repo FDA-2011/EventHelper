@@ -1,19 +1,24 @@
+import os
 from io import BytesIO
+
 import requests
-from vkbottle.bot import Message, BotLabeler
-from vkbottle import BaseStateGroup, Keyboard, Callback, DocMessagesUploader, PhotoMessageUploader
-from vkbottle import GroupEventType
-from vkbottle.bot import MessageEvent
+from vkbottle.bot import Message, BotLabeler, MessageEvent
+from vkbottle import (
+    BaseStateGroup, Keyboard, Callback,
+    DocMessagesUploader, PhotoMessageUploader, GroupEventType,
+)
 
 from bot_instance import bot
-from config import VENUE_POIS
 from database import db
 from helpers import build_ics
 
 router = BotLabeler()
 router.vbml_ignore_case = True
 
-PENDING_QUESTIONS = {}
+PENDING_QUESTIONS: dict[int, dict] = {}
+
+# Путь к сохранённой карте площадки (загружается через Streamlit-админку)
+VENUE_MAP_PATH = "venue_map.jpg"
 
 
 class AskForm(BaseStateGroup):
@@ -21,6 +26,9 @@ class AskForm(BaseStateGroup):
     question = "question"
 
 
+# ============================================================
+# 3.2 Программа и поиск
+# ============================================================
 @router.message(text="/program")
 async def show_program(message: Message):
     rows = db.con.execute(
@@ -56,27 +64,39 @@ async def search(message: Message, query: str = None):
         await message.answer("Использование: /search <слово>")
         return
 
-    q = f"%{query.lower().strip()}%"
-
     try:
-        rows = db.con.execute(
-            "SELECT s.title, s.start_time, sp.full_name AS speaker, l.name AS hall "
+        all_sessions = db.con.execute(
+            "SELECT s.title, s.start_time, sp.full_name AS speaker, "
+            "       l.name AS hall, t.name AS track "
             "FROM sessions s "
             "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
             "LEFT JOIN locations l ON s.location_id = l.id "
             "LEFT JOIN tracks t ON s.track_id = t.id "
-            "WHERE LOWER(s.title) LIKE ? OR LOWER(sp.full_name) LIKE ? OR LOWER(t.name) LIKE ? OR LOWER(l.name) LIKE ?",
-            (q, q, q, q),
+            "ORDER BY s.start_time"
         ).fetchall()
 
+        if not all_sessions:
+            await message.answer("Программа пока пуста.")
+            return
+
+        q = query.lower().strip()
+        rows = [
+            r for r in all_sessions
+            if q in (r["title"] or "").lower()
+            or q in (r["speaker"] or "").lower()
+            or q in (r["hall"] or "").lower()
+            or q in (r["track"] or "").lower()
+        ]
+
         if not rows:
-            await message.answer("Ничего не найдено.")
+            await message.answer(f"По запросу «{query}» ничего не найдено.")
             return
 
         await message.answer(
             "🔍 Результаты:\n" + "\n".join(
                 f"• {r['title']} — {r['speaker'] or 'Нет спикера'} "
-                f"({r['start_time'].split(' ')[1][:5] if ' ' in r['start_time'] else r['start_time']}, {r['hall'] or 'Зал не указан'})"
+                f"({r['start_time'].split(' ')[1][:5] if ' ' in r['start_time'] else r['start_time']}, "
+                f"{r['hall'] or 'Зал не указан'})"
                 for r in rows
             )
         )
@@ -101,7 +121,7 @@ async def my_schedule(message: Message):
                 "LEFT JOIN locations l ON s.location_id = l.id "
                 "WHERE us.user_id = ? "
                 "ORDER BY s.start_time",
-                (user["id"],)
+                (user["id"],),
             ).fetchall()
             selected = [dict(r) for r in sessions]
 
@@ -138,61 +158,31 @@ async def my_schedule(message: Message):
         await message.answer(f"⚠️ Не удалось сформировать .ics: {e}")
 
 
-async def _send_map_image(message: Message, url: str, caption: str):
-    try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        buf = BytesIO(resp.content)
-        buf.name = "map.png"
-        uploader = PhotoMessageUploader(bot.api)
-        photo = await uploader.upload(buf, peer_id=message.peer_id)
-        await message.answer(message=caption, attachment=photo)
-    except Exception:
-        await message.answer(f"{caption}\n\n{url}")
-
-
+# ============================================================
+# 3.2 Карта площадки
+# ============================================================
 @router.message(text="/map")
 async def show_map(message: Message):
-    pts = "~".join(f"{lon},{lat},pm2rdm" for lon, lat in VENUE_POIS.values())
-    url = (
-        f"https://static-maps.yandex.ru/1.x/?"
-        f"ll=37.617,55.755&z=17&size=650,450&l=map&pt={pts}"
-    )
-    await _send_map_image(
-        message, url,
-        "🗺️ Карта площадки. Маршрут: /route <откуда> <куда>\n"
-        "Доступно: " + ", ".join(VENUE_POIS.keys()),
-    )
-
-
-@router.message(text=["/route", "/route <origin> <dest>"])
-async def route(message: Message, origin: str = None, dest: str = None):
-    if not origin or not dest:
+    if not os.path.exists(VENUE_MAP_PATH):
         await message.answer(
-            "Использование: /route <откуда> <куда>\n"
-            "Доступно: " + ", ".join(VENUE_POIS.keys())
+            "🗺️ Карта площадки ещё не загружена администратором."
         )
         return
 
-    origin, dest = origin.lower(), dest.lower()
-    if origin not in VENUE_POIS or dest not in VENUE_POIS:
-        await message.answer(
-            f"Точка не найдена. Доступно: {', '.join(VENUE_POIS.keys())}"
-        )
-        return
-
-    ox, oy = VENUE_POIS[origin]
-    dx, dy = VENUE_POIS[dest]
-    pl = f"{ox},{oy},{dx},{dy}"
-    url = (
-        f"https://static-maps.yandex.ru/1.x/?"
-        f"ll=37.617,55.755&z=17&size=650,450&l=map"
-        f"&pl={pl}"
-        f"&pt={ox},{oy},pm2gnm~{dx},{dy},pm2rdm"
-    )
-    await _send_map_image(message, url, f"🧭 Маршрут: {origin} → {dest}")
+    try:
+        with open(VENUE_MAP_PATH, "rb") as f:
+            buf = BytesIO(f.read())
+        buf.name = "map.jpg"
+        uploader = PhotoMessageUploader(bot.api)
+        photo = await uploader.upload(buf, peer_id=message.peer_id)
+        await message.answer(message="🗺️ Карта площадки", attachment=photo)
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось отправить карту: {e}")
 
 
+# ============================================================
+# 3.3 Спикеры и вопросы
+# ============================================================
 @router.message(text=["/speaker", "/speaker <query>"])
 async def speaker_profile(message: Message, query: str = None):
     if not query:
@@ -219,7 +209,10 @@ async def ask_start(message: Message):
     await message.answer("Введите ФИО спикера:")
 
 
-@router.message(state=AskForm.speaker, func=lambda m: m.text and not m.text.startswith("/"))
+@router.message(
+    state=AskForm.speaker,
+    func=lambda m: m.text and not m.text.startswith("/"),
+)
 async def ask_speaker(message: Message):
     await bot.state_dispenser.set(
         message.peer_id, AskForm.question, speaker=message.text.strip()
@@ -227,12 +220,15 @@ async def ask_speaker(message: Message):
     await message.answer("Введите текст вопроса:")
 
 
-@router.message(state=AskForm.question, func=lambda m: m.text and not m.text.startswith("/"))
+@router.message(
+    state=AskForm.question,
+    func=lambda m: m.text and not m.text.startswith("/"),
+)
 async def ask_question(message: Message):
     p = message.state_peer.payload
     PENDING_QUESTIONS[message.peer_id] = {
         "speaker": p["speaker"],
-        "question": message.text.strip()
+        "question": message.text.strip(),
     }
     await bot.state_dispenser.delete(message.peer_id)
     kb = (
@@ -244,22 +240,28 @@ async def ask_question(message: Message):
     await message.answer("Как отправить?", keyboard=kb.get_json())
 
 
-@router.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)
+@router.raw_event(
+    GroupEventType.MESSAGE_EVENT,
+    dataclass=MessageEvent,
+    blocking=False,
+)
 async def handle_anonymity_callback(event: MessageEvent):
+    payload = event.payload or {}
+
+    if "anon" not in payload:
+        return
+
     try:
         await event.show_snackbar("Ваш выбор принят!")
     except Exception:
         pass
-
-    if "anon" not in (event.payload or {}):
-        return
 
     p = PENDING_QUESTIONS.pop(event.peer_id, None)
     if not p:
         await event.send_message("Ошибка: сессия истекла. Начните заново /ask")
         return
 
-    is_anon = event.payload.get("anon") == "yes"
+    is_anon = payload.get("anon") == "yes"
     speaker_name = p.get("speaker")
     question_text = p.get("question")
 

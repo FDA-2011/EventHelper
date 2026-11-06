@@ -203,4 +203,5 @@ CREATE TABLE IF NOT EXISTS support_messages (
         with self.lock:
             return self.select("users", {"registration_status": "confirmed"})
 
+
 db = DataBase()
