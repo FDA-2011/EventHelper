@@ -1,13 +1,12 @@
 import sqlite3
-import os
-from pathlib import Path
+import threading
 
 class DataBase:
-    def __init__(self, path: str | None = None):
-        path = path or os.getenv("DATABASE_PATH", "bot.db")
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(path)
-        self.con.row_factory = sqlite3.Row          # ← чтобы dict(row) работал
+    def __init__(self, path: str = "bot.db"):
+        self.con = sqlite3.connect(path, check_same_thread=False, timeout=15)
+        self.lock = threading.RLock()
+        self.con.execute("PRAGMA journal_mode=WAL;")
+        self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
         self.cur = self.con.cursor()
 
@@ -27,27 +26,23 @@ CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
 CREATE TABLE IF NOT EXISTS user_tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     tag_name TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     type TEXT DEFAULT 'hall',
     map_description TEXT
 );
-
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     description TEXT
 );
-
 CREATE TABLE IF NOT EXISTS speakers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     full_name TEXT NOT NULL,
@@ -55,7 +50,6 @@ CREATE TABLE IF NOT EXISTS speakers (
     photo_url TEXT,
     social_links TEXT
 );
-
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -70,7 +64,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE SET NULL,
     FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE SET NULL
 );
-
 CREATE TABLE IF NOT EXISTS user_schedule (
     user_id INTEGER NOT NULL,
     session_id INTEGER NOT NULL,
@@ -79,32 +72,29 @@ CREATE TABLE IF NOT EXISTS user_schedule (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS questions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     session_id INTEGER NOT NULL,
     question_text TEXT NOT NULL,
+    answer_text TEXT,
     is_anonymous BOOLEAN DEFAULT 0,
     status TEXT DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS polls (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
     is_active BOOLEAN DEFAULT 1
 );
-
 CREATE TABLE IF NOT EXISTS poll_options (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     poll_id INTEGER NOT NULL,
     option_text TEXT NOT NULL,
     FOREIGN KEY (poll_id) REFERENCES polls(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS poll_votes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     poll_id INTEGER NOT NULL,
@@ -115,7 +105,6 @@ CREATE TABLE IF NOT EXISTS poll_votes (
     FOREIGN KEY (option_id) REFERENCES poll_options(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -126,7 +115,6 @@ CREATE TABLE IF NOT EXISTS feedback (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
-
 CREATE TABLE IF NOT EXISTS broadcasts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text_content TEXT,
@@ -136,14 +124,12 @@ CREATE TABLE IF NOT EXISTS broadcasts (
     status TEXT DEFAULT 'draft',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
 CREATE TABLE IF NOT EXISTS faq (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     keywords TEXT
 );
-
 CREATE TABLE IF NOT EXISTS support_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -154,92 +140,67 @@ CREATE TABLE IF NOT EXISTS support_messages (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 """
-        self.con.executescript(schema)              # ← несколько команд за раз
+        self.con.executescript(schema)
         self.con.commit()
 
-    # --- базовые CRUD ---
     def insert(self, table, data):
-        keys = ", ".join(data.keys())
-        placeholders = ", ".join(["?"] * len(data))
-        sql = f"INSERT INTO {table} ({keys}) VALUES ({placeholders})"
-        cur = self.con.execute(sql, tuple(data.values()))
-        self.con.commit()
-        return cur.lastrowid
+        with self.lock:
+            keys = ", ".join(data.keys())
+            placeholders = ", ".join(["?"] * len(data))
+            sql = f"INSERT INTO {table} ({keys}) VALUES ({placeholders})"
+            cur = self.con.execute(sql, tuple(data.values()))
+            self.con.commit()
+            return cur.lastrowid
 
     def select(self, table, conditions=None, columns="*"):
-        sql = f"SELECT {columns} FROM {table}"
-        params = []
-        if conditions:
-            sql += " WHERE " + " AND ".join(f"{k} = ?" for k in conditions)
-            params = list(conditions.values())
-        self.cur.execute(sql, tuple(params))
-        return [dict(row) for row in self.cur.fetchall()]
+        with self.lock:
+            sql = f"SELECT {columns} FROM {table}"
+            params = []
+            if conditions:
+                sql += " WHERE " + " AND ".join(f"{k} = ?" for k in conditions)
+                params = list(conditions.values())
+            self.cur.execute(sql, tuple(params))
+            return [dict(row) for row in self.cur.fetchall()]
 
     def update(self, table, data, conditions):
-        set_clause = ", ".join(f"{k} = ?" for k in data)
-        where_clause = " AND ".join(f"{k} = ?" for k in conditions)
-        sql = f"UPDATE {table} SET {set_clause} WHERE {where_clause}"
-        self.con.execute(sql, tuple(data.values()) + tuple(conditions.values()))
-        self.con.commit()
+        with self.lock:
+            set_clause = ", ".join(f"{k} = ?" for k in data)
+            where_clause = " AND ".join(f"{k} = ?" for k in conditions)
+            sql = f"UPDATE {table} SET {set_clause} WHERE {where_clause}"
+            self.con.execute(sql, tuple(data.values()) + tuple(conditions.values()))
+            self.con.commit()
 
     def delete(self, table, conditions) -> int:
-        where_clause = " AND ".join(f"{k} = ?" for k in conditions)
-        sql = f"DELETE FROM {table} WHERE {where_clause}"
-        cur = self.con.execute(sql, tuple(conditions.values()))
-        self.con.commit()
-        return cur.rowcount
+        with self.lock:
+            where_clause = " AND ".join(f"{k} = ?" for k in conditions)
+            sql = f"DELETE FROM {table} WHERE {where_clause}"
+            cur = self.con.execute(sql, tuple(conditions.values()))
+            self.con.commit()
+            return cur.rowcount
 
-    # --- удобные хелперы для бота ---
     def get_user(self, vk_user_id: int) -> dict | None:
-        rows = self.select("users", {"vk_user_id": vk_user_id})
-        return rows[0] if rows else None
+        with self.lock:
+            rows = self.select("users", {"vk_user_id": vk_user_id})
+            return rows[0] if rows else None
 
     def upsert_user(self, vk_user_id: int, data: dict) -> int:
-        """Если пользователь есть — обновляет, иначе создаёт. Возвращает id."""
-        existing = self.get_user(vk_user_id)
-        data = {**data, "vk_user_id": vk_user_id, "updated_at": "CURRENT_TIMESTAMP"}
-        if existing:
-            # CURRENT_TIMESTAMP — выражение, поэтому через прямой SQL
-            sets = ", ".join(f"{k} = ?" for k in data if k != "updated_at")
-            self.con.execute(
-                f"UPDATE users SET {sets}, updated_at = CURRENT_TIMESTAMP "
-                f"WHERE vk_user_id = ?",
-                tuple(data[k] for k in data if k != "updated_at") + (vk_user_id,),
-            )
-            self.con.commit()
-            return existing["id"]
-        # insert
-        data.pop("updated_at", None)
-        return self.insert("users", data)
+        with self.lock:
+            existing = self.get_user(vk_user_id)
+            data = {**data, "vk_user_id": vk_user_id, "updated_at": "CURRENT_TIMESTAMP"}
+            if existing:
+                sets = ", ".join(f"{k} = ?" for k in data if k != "updated_at")
+                self.con.execute(
+                    f"UPDATE users SET {sets}, updated_at = CURRENT_TIMESTAMP "
+                    f"WHERE vk_user_id = ?",
+                    tuple(data[k] for k in data if k != "updated_at") + (vk_user_id,),
+                )
+                self.con.commit()
+                return existing["id"]
+            data.pop("updated_at", None)
+            return self.insert("users", data)
 
     def get_confirmed_users(self) -> list[dict]:
-        return self.select("users", {"registration_status": "confirmed"})
+        with self.lock:
+            return self.select("users", {"registration_status": "confirmed"})
 
-    def get_first_session(self) -> dict | None:
-        row = self.con.execute(
-            "SELECT id, title, start_time, end_time FROM sessions ORDER BY start_time LIMIT 1"
-        ).fetchone()
-        return dict(row) if row else None
-
-    def get_user_schedule(self, user_id: int) -> list[dict]:
-        rows = self.con.execute(
-            "SELECT s.id, s.title, s.start_time, s.end_time, "
-            "sp.full_name AS speaker, l.name AS hall "
-            "FROM user_schedule us JOIN sessions s ON s.id = us.session_id "
-            "LEFT JOIN speakers sp ON sp.id = s.speaker_id "
-            "LEFT JOIN locations l ON l.id = s.location_id "
-            "WHERE us.user_id = ? ORDER BY s.start_time", (user_id,)
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def add_to_schedule(self, user_id: int, session_id: int) -> bool:
-        cur = self.con.execute(
-            "INSERT OR IGNORE INTO user_schedule (user_id, session_id) VALUES (?, ?)",
-            (user_id, session_id)
-        )
-        self.con.commit()
-        return cur.rowcount > 0
-
-
-# Глобальный экземпляр — импортируется во всех хендлерах
 db = DataBase()

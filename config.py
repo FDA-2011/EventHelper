@@ -9,20 +9,16 @@ ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().
 
 CRM_API_URL = os.getenv("CRM_API_URL", "")
 CRM_API_KEY = os.getenv("CRM_API_KEY", "")
-CRM_ENABLED = os.getenv("CRM_ENABLED", "0").lower() in ("1", "true", "yes")
 
-# ---------- Точки площадки (для /map и /route) ----------
-# Координаты — lon,lat. Замените на реальные координаты вашей площадки.
 VENUE_POIS = {
-    "вход": tuple(map(float, os.getenv("VENUE_ENTRY", "37.6160,55.7545").split(","))),
-    "гардероб": tuple(map(float, os.getenv("VENUE_WARDROBE", "37.6165,55.7550").split(","))),
-    "зал а": tuple(map(float, os.getenv("VENUE_HALL_A", "37.6175,55.7555").split(","))),
-    "зал б": tuple(map(float, os.getenv("VENUE_HALL_B", "37.6185,55.7560").split(","))),
-    "парковка": tuple(map(float, os.getenv("VENUE_PARKING", "37.6155,55.7540").split(","))),
-    "выход": tuple(map(float, os.getenv("VENUE_EXIT", "37.6160,55.7545").split(","))),
+    "вход":     (37.6160, 55.7545),
+    "гардероб": (37.6165, 55.7550),
+    "зал а":    (37.6175, 55.7555),
+    "зал б":    (37.6185, 55.7560),
+    "парковка": (37.6155, 55.7540),
+    "выход":    (37.6160, 55.7545),
 }
 
-# ---------- Seed-данные: используются только при первом запуске ----------
 SEED_SPEAKERS = [
     {"full_name": "Иванов И.И.", "bio": "Эксперт в области AI, 10 лет опыта.",
      "social_links": "@ivanov_ai"},

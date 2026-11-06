@@ -1,6 +1,11 @@
-from vkbottle.bot import Bot, Message, BotLabeler
-from vkbottle import BaseStateGroup, Keyboard, Callback, DocMessagesUploader
+from io import BytesIO
+import requests
+from vkbottle.bot import Message, BotLabeler
+from vkbottle import BaseStateGroup, Keyboard, Callback, DocMessagesUploader, PhotoMessageUploader
+from vkbottle import GroupEventType
+from vkbottle.bot import MessageEvent
 
+from bot_instance import bot
 from config import VENUE_POIS
 from database import db
 from helpers import build_ics
@@ -8,18 +13,18 @@ from helpers import build_ics
 router = BotLabeler()
 router.vbml_ignore_case = True
 
+PENDING_QUESTIONS = {}
+
 
 class AskForm(BaseStateGroup):
     speaker = "speaker"
     question = "question"
-    anonymity = "anonymity"
 
 
-# ---------- Программа ----------
 @router.message(text="/program")
 async def show_program(message: Message):
     rows = db.con.execute(
-        "SELECT s.id, s.title, s.start_time, s.end_time, "
+        "SELECT s.title, s.start_time, s.end_time, "
         "       sp.full_name AS speaker, l.name AS hall "
         "FROM sessions s "
         "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
@@ -38,129 +43,138 @@ async def show_program(message: Message):
     for hall, sessions in halls.items():
         lines.append(f"🏛️ {hall}")
         for s in sessions:
-            start = s["start_time"].split(" ")[1][:5]
-            end = s["end_time"].split(" ")[1][:5]
-            lines.append(f"  ID {s['id']}: {start}–{end} — {s['title']} ({s['speaker'] or 'спикер не указан'})")
+            start = s["start_time"].split(" ")[1][:5] if " " in s["start_time"] else s["start_time"]
+            end = s["end_time"].split(" ")[1][:5] if " " in s["end_time"] else s["end_time"]
+            lines.append(f"  {start}–{end} — {s['title']} ({s['speaker'] or 'Нет спикера'})")
         lines.append("")
     await message.answer("\n".join(lines))
 
 
-# ---------- Поиск докладов ----------
-@router.message(func=lambda m: m.text and m.text.lower().startswith("/search "))
-async def search(message: Message):
-    query = message.text[len("/search "):].strip()
+@router.message(text=["/search", "/search <query>"])
+async def search(message: Message, query: str = None):
     if not query:
         await message.answer("Использование: /search <слово>")
         return
-    q = f"%{query.lower()}%"
-    rows = db.con.execute(
-        "SELECT s.title, s.start_time, sp.full_name AS speaker, l.name AS hall "
-        "FROM sessions s "
-        "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
-        "LEFT JOIN locations l ON s.location_id = l.id "
-        "WHERE LOWER(s.title) LIKE ? OR LOWER(sp.full_name) LIKE ?",
-        (q, q),
-    ).fetchall()
-    if not rows:
-        await message.answer("Ничего не найдено.")
-        return
-    await message.answer(
-        "🔍 Результаты:\n" + "\n".join(
-            f"• {r['title']} — {r['speaker']} "
-            f"({r['start_time'].split(' ')[1][:5]}, {r['hall']})"
-            for r in rows
-        )
-    )
 
+    q = f"%{query.lower().strip()}%"
 
-@router.message(text="/search")
-async def search_usage(message: Message):
-    await message.answer("Использование: /search <слово>")
-
-
-# ---------- Экспорт расписания ----------
-@router.message(text="/my_schedule")
-async def my_schedule(message: Message, bot: Bot):
-    user = db.get_user(message.from_id or message.peer_id)
-    if not user:
-        await message.answer("Сначала зарегистрируйтесь: /register")
-        return
-    selected = db.get_user_schedule(user["id"])
-    if not selected:
-        await message.answer("Личное расписание пусто. Добавьте доклады командой /schedule_add <ID>. Программа: /program")
-        return
-    buf = build_ics(selected)
     try:
+        rows = db.con.execute(
+            "SELECT s.title, s.start_time, sp.full_name AS speaker, l.name AS hall "
+            "FROM sessions s "
+            "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
+            "LEFT JOIN locations l ON s.location_id = l.id "
+            "LEFT JOIN tracks t ON s.track_id = t.id "
+            "WHERE LOWER(s.title) LIKE ? OR LOWER(sp.full_name) LIKE ? OR LOWER(t.name) LIKE ? OR LOWER(l.name) LIKE ?",
+            (q, q, q, q),
+        ).fetchall()
+
+        if not rows:
+            await message.answer("Ничего не найдено.")
+            return
+
+        await message.answer(
+            "🔍 Результаты:\n" + "\n".join(
+                f"• {r['title']} — {r['speaker'] or 'Нет спикера'} "
+                f"({r['start_time'].split(' ')[1][:5] if ' ' in r['start_time'] else r['start_time']}, {r['hall'] or 'Зал не указан'})"
+                for r in rows
+            )
+        )
+    except Exception as e:
+        print(f"Ошибка поиска: {e}")
+        await message.answer("⚠️ Ошибка при поиске докладов.")
+
+
+@router.message(text="/my_schedule")
+async def my_schedule(message: Message):
+    try:
+        user = db.get_user(message.peer_id)
+        selected = []
+
+        if user:
+            sessions = db.con.execute(
+                "SELECT s.title, s.start_time, s.end_time, "
+                "       sp.full_name AS speaker, l.name AS hall "
+                "FROM user_schedule us "
+                "JOIN sessions s ON us.session_id = s.id "
+                "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
+                "LEFT JOIN locations l ON s.location_id = l.id "
+                "WHERE us.user_id = ? "
+                "ORDER BY s.start_time",
+                (user["id"],)
+            ).fetchall()
+            selected = [dict(r) for r in sessions]
+
+        if not selected:
+            rows = db.con.execute(
+                "SELECT s.title, s.start_time, s.end_time, "
+                "       sp.full_name AS speaker, l.name AS hall "
+                "FROM sessions s "
+                "LEFT JOIN speakers sp ON s.speaker_id = sp.id "
+                "LEFT JOIN locations l ON s.location_id = l.id "
+                "ORDER BY s.start_time"
+            ).fetchall()
+            selected = [dict(r) for r in rows]
+
+        if not selected:
+            await message.answer("Расписание пока пусто.")
+            return
+
+        payload = [
+            {
+                "title": s["title"],
+                "hall": s["hall"] or "—",
+                "speaker": s["speaker"] or "",
+                "start": s["start_time"][11:16] if len(s["start_time"]) > 16 else "00:00",
+                "end": s["end_time"][11:16] if len(s["end_time"]) > 16 else "00:00",
+            }
+            for s in selected
+        ]
+        buf = build_ics(payload)
         uploader = DocMessagesUploader(bot.api)
         doc = await uploader.upload(buf, peer_id=message.peer_id, title="my_schedule.ics")
-        await message.answer(message="Ваше личное расписание (.ics)", attachment=[str(doc)])
+        await message.answer(message="Ваше расписание (.ics)", attachment=doc)
     except Exception as e:
-        await message.answer("Не удалось отправить календарь. Ваше расписание:\n" + "\n".join(
-            f"{r['start_time']} — {r['title']} ({r['hall'] or '—'})" for r in selected
-        ))
+        await message.answer(f"⚠️ Не удалось сформировать .ics: {e}")
 
 
-@router.message(func=lambda m: m.text and m.text.lower().startswith("/schedule_add "))
-async def schedule_add(message: Message):
+async def _send_map_image(message: Message, url: str, caption: str):
     try:
-        session_id = int(message.text.split(maxsplit=1)[1])
-    except (ValueError, IndexError):
-        await message.answer("Использование: /schedule_add <ID доклада>. ID можно увидеть в /program")
-        return
-    user = db.get_user(message.from_id or message.peer_id)
-    if not user:
-        await message.answer("Сначала зарегистрируйтесь: /register")
-        return
-    if not db.select("sessions", {"id": session_id}):
-        await message.answer("Доклад с таким ID не найден. Посмотрите /program")
-        return
-    added = db.add_to_schedule(user["id"], session_id)
-    await message.answer("Доклад добавлен в ваше расписание." if added else "Этот доклад уже есть в расписании.")
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        buf = BytesIO(resp.content)
+        buf.name = "map.png"
+        uploader = PhotoMessageUploader(bot.api)
+        photo = await uploader.upload(buf, peer_id=message.peer_id)
+        await message.answer(message=caption, attachment=photo)
+    except Exception:
+        await message.answer(f"{caption}\n\n{url}")
 
 
-@router.message(func=lambda m: m.text and m.text.lower().startswith("/schedule_remove "))
-async def schedule_remove(message: Message):
-    try:
-        session_id = int(message.text.split(maxsplit=1)[1])
-    except (ValueError, IndexError):
-        await message.answer("Использование: /schedule_remove <ID доклада>")
-        return
-    user = db.get_user(message.from_id or message.peer_id)
-    if not user:
-        await message.answer("Сначала зарегистрируйтесь: /register")
-        return
-    removed = db.delete("user_schedule", {"user_id": user["id"], "session_id": session_id})
-    await message.answer("Доклад удалён из расписания." if removed else "Такого доклада нет в вашем расписании.")
-
-
-@router.message(text=["/schedule_add", "/schedule_remove"])
-async def schedule_usage(message: Message):
-    await message.answer("Укажите ID доклада. Список: /program")
-
-
-# ---------- Карта площадки ----------
 @router.message(text="/map")
 async def show_map(message: Message):
-    lon, lat = next(iter(VENUE_POIS.values()))
-    url = f"https://yandex.ru/maps/?ll={lon}%2C{lat}&z=17"
-    await message.answer(
-        "🗺️ Карта площадки: " + url + "\nМаршрут: /route <откуда> <куда>\n"
-        "Доступные точки: " + ", ".join(VENUE_POIS.keys())
+    pts = "~".join(f"{lon},{lat},pm2rdm" for lon, lat in VENUE_POIS.values())
+    url = (
+        f"https://static-maps.yandex.ru/1.x/?"
+        f"ll=37.617,55.755&z=17&size=650,450&l=map&pt={pts}"
+    )
+    await _send_map_image(
+        message, url,
+        "🗺️ Карта площадки. Маршрут: /route <откуда> <куда>\n"
+        "Доступно: " + ", ".join(VENUE_POIS.keys()),
     )
 
 
-@router.message(func=lambda m: m.text and m.text.lower().startswith("/route "))
-async def route(message: Message):
-    body = message.text[len("/route "):].strip()
-    parts = body.split(maxsplit=1)
-    if len(parts) < 2:
+@router.message(text=["/route", "/route <origin> <dest>"])
+async def route(message: Message, origin: str = None, dest: str = None):
+    if not origin or not dest:
         await message.answer(
             "Использование: /route <откуда> <куда>\n"
             "Доступно: " + ", ".join(VENUE_POIS.keys())
         )
         return
 
-    origin, dest = parts[0].lower(), parts[1].lower()
+    origin, dest = origin.lower(), dest.lower()
     if origin not in VENUE_POIS or dest not in VENUE_POIS:
         await message.answer(
             f"Точка не найдена. Доступно: {', '.join(VENUE_POIS.keys())}"
@@ -169,25 +183,25 @@ async def route(message: Message):
 
     ox, oy = VENUE_POIS[origin]
     dx, dy = VENUE_POIS[dest]
-    url = f"https://yandex.ru/maps/?rtext={oy}%2C{ox}~{dy}%2C{dx}&rtt=pd"
-    await message.answer(f"🧭 Маршрут: {origin} → {dest}\n{url}")
-
-
-@router.message(text="/route")
-async def route_usage(message: Message):
-    await message.answer(
-        "Использование: /route <откуда> <куда>\n"
-        "Доступно: " + ", ".join(VENUE_POIS.keys())
+    pl = f"{ox},{oy},{dx},{dy}"
+    url = (
+        f"https://static-maps.yandex.ru/1.x/?"
+        f"ll=37.617,55.755&z=17&size=650,450&l=map"
+        f"&pl={pl}"
+        f"&pt={ox},{oy},pm2gnm~{dx},{dy},pm2rdm"
     )
+    await _send_map_image(message, url, f"🧭 Маршрут: {origin} → {dest}")
 
 
-# ---------- Спикеры ----------
-@router.message(func=lambda m: m.text and m.text.lower().startswith("/speaker "))
-async def speaker_profile(message: Message):
-    name = message.text[len("/speaker "):].strip()
-    if not name:
-        await message.answer("Использование: /speaker <ФИО спикера>")
+@router.message(text=["/speaker", "/speaker <query>"])
+async def speaker_profile(message: Message, query: str = None):
+    if not query:
+        rows = db.select("speakers")
+        names = ", ".join(r["full_name"] for r in rows) if rows else "—"
+        await message.answer(f"Использование: /speaker <ФИО>\nДоступные спикеры: {names}")
         return
+
+    name = query.strip()
     rows = db.select("speakers", {"full_name": name})
     if not rows:
         await message.answer(f"Спикер «{name}» не найден.")
@@ -199,35 +213,28 @@ async def speaker_profile(message: Message):
     )
 
 
-@router.message(text="/speaker")
-async def speaker_usage(message: Message):
-    rows = db.select("speakers")
-    names = ", ".join(r["full_name"] for r in rows) if rows else "—"
-    await message.answer(f"Использование: /speaker <ФИО>\nДоступные спикеры: {names}")
-
-
-# ---------- Вопрос спикеру ----------
 @router.message(text="/ask")
-async def ask_start(message: Message, bot: Bot):
+async def ask_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, AskForm.speaker)
     await message.answer("Введите ФИО спикера:")
 
 
-@router.message(state=AskForm.speaker)
-async def ask_speaker(message: Message, bot: Bot):
+@router.message(state=AskForm.speaker, func=lambda m: m.text and not m.text.startswith("/"))
+async def ask_speaker(message: Message):
     await bot.state_dispenser.set(
         message.peer_id, AskForm.question, speaker=message.text.strip()
     )
     await message.answer("Введите текст вопроса:")
 
 
-@router.message(state=AskForm.question)
-async def ask_question(message: Message, bot: Bot):
+@router.message(state=AskForm.question, func=lambda m: m.text and not m.text.startswith("/"))
+async def ask_question(message: Message):
     p = message.state_peer.payload
-    await bot.state_dispenser.set(
-        message.peer_id, AskForm.anonymity,
-        speaker=p["speaker"], question=message.text.strip(),
-    )
+    PENDING_QUESTIONS[message.peer_id] = {
+        "speaker": p["speaker"],
+        "question": message.text.strip()
+    }
+    await bot.state_dispenser.delete(message.peer_id)
     kb = (
         Keyboard(inline=True)
         .add(Callback("Анонимно", payload={"anon": "yes"}))
@@ -237,15 +244,28 @@ async def ask_question(message: Message, bot: Bot):
     await message.answer("Как отправить?", keyboard=kb.get_json())
 
 
-@router.message(state=AskForm.anonymity)
-async def ask_anonymity(message: Message, bot: Bot):
-    p = message.state_peer.payload
-    is_anon = (message.payload or {}).get("anon") == "yes"
-    await bot.state_dispenser.delete(message.peer_id)
+@router.raw_event(GroupEventType.MESSAGE_EVENT, dataclass=MessageEvent)
+async def handle_anonymity_callback(event: MessageEvent):
+    try:
+        await event.show_snackbar("Ваш выбор принят!")
+    except Exception:
+        pass
 
-    speaker_rows = db.select("speakers", {"full_name": p["speaker"]})
+    if "anon" not in (event.payload or {}):
+        return
+
+    p = PENDING_QUESTIONS.pop(event.peer_id, None)
+    if not p:
+        await event.send_message("Ошибка: сессия истекла. Начните заново /ask")
+        return
+
+    is_anon = event.payload.get("anon") == "yes"
+    speaker_name = p.get("speaker")
+    question_text = p.get("question")
+
+    speaker_rows = db.select("speakers", {"full_name": speaker_name})
     if not speaker_rows:
-        await message.answer("Спикер не найден — вопрос не сохранён.")
+        await event.send_message("Спикер не найден — вопрос не сохранён.")
         return
 
     session_row = db.con.execute(
@@ -253,17 +273,17 @@ async def ask_anonymity(message: Message, bot: Bot):
         (speaker_rows[0]["id"],),
     ).fetchone()
     if not session_row:
-        await message.answer("У спикера нет докладов в программе.")
+        await event.send_message("У спикера нет докладов в программе.")
         return
 
-    user = db.get_user(message.from_id or message.peer_id)
+    user = db.get_user(event.user_id)
     db.insert("questions", {
         "user_id": user["id"] if user else None,
         "session_id": session_row["id"],
-        "question_text": p["question"],
+        "question_text": question_text,
         "is_anonymous": int(is_anon),
         "status": "pending",
     })
-    await message.answer(
-        "✅ Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
-    )
+
+    confirm_text = "✅ Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
+    await event.send_message(confirm_text)

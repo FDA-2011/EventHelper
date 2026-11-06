@@ -33,3 +33,5 @@ def seed_if_empty():
     if not db.select("faq"):
         for f in SEED_FAQ:
             db.insert("faq", f)
+
+    print("✅ База данных успешно инициализирована тестовыми данными.")

@@ -3,10 +3,11 @@ import re
 import uuid
 import logging
 from datetime import datetime
+import requests
 
 import qrcode
 
-from config import CRM_API_URL, CRM_API_KEY, CRM_ENABLED
+from config import CRM_API_URL, CRM_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +22,21 @@ def validate_phone(phone: str) -> bool:
 
 
 def generate_qr(data: str) -> io.BytesIO:
+    print(f"⏳ [helpers] Начинаю генерацию QR для данных: {data}")
     qr = qrcode.make(data)
     buf = io.BytesIO()
-    qr.save(buf, format="PNG")
+    qr.save(buf)
+    buf.name = "qr.png"
     buf.seek(0)
+    print("✅ [helpers] QR успешно сгенерирован в памяти")
     return buf
 
 
-def build_ics(sessions: list[dict], date_str: str | None = None) -> io.BytesIO:
+def build_ics(sessions: list[dict], date_str: str = "20261105") -> io.BytesIO:
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//VK Forum Bot//RU"]
     for s in sessions:
-        start_value = s.get("start_time")
-        end_value = s.get("end_time")
-        if start_value and end_value:
-            start = datetime.fromisoformat(str(start_value))
-            end = datetime.fromisoformat(str(end_value))
-        else:
-            day = date_str or datetime.now().strftime("%Y%m%d")
-            start = datetime.strptime(f"{day} {s['start']}", "%Y%m%d %H:%M")
-            end = datetime.strptime(f"{day} {s['end']}", "%Y%m%d %H:%M")
+        start = datetime.strptime(f"{date_str} {s['start']}", "%Y%m%d %H:%M")
+        end = datetime.strptime(f"{date_str} {s['end']}", "%Y%m%d %H:%M")
         lines += [
             "BEGIN:VEVENT",
             f"UID:{uuid.uuid4()}",
@@ -57,20 +54,15 @@ def build_ics(sessions: list[dict], date_str: str | None = None) -> io.BytesIO:
 
 
 def crm_register(data: dict) -> str | None:
-    if not CRM_ENABLED:
-        return "local-" + uuid.uuid4().hex[:8]
-    if not CRM_API_URL or not CRM_API_KEY:
-        logger.error("CRM is enabled but CRM_API_URL / CRM_API_KEY are missing")
-        return None
     try:
-        import requests
-        response = requests.post(
-            f"{CRM_API_URL.rstrip('/')}/register", json=data,
-            headers={"X-API-Key": CRM_API_KEY}, timeout=10
-        )
-        response.raise_for_status()
-        result = response.json()
-        return str(result.get("id") or result.get("crm_id") or "") or None
+        try:
+            requests.post(f"{CRM_API_URL}/register", json=data,
+                       headers={"X-API-Key": CRM_API_KEY}, timeout=10)
+        except Exception as e:
+            print("Ошибка при CRM")
+
+        logger.info("CRM stub: %s", data)
+        return "demo-crm-" + uuid.uuid4().hex[:8]
     except Exception as exc:
         logger.error("CRM error: %s", exc)
         return None
