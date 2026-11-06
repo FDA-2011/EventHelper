@@ -110,6 +110,7 @@ async def poll_callback(event: MessageEvent):
         kb = Keyboard(inline=True)
         for i in range(1, 6):
             kb.add(Callback(
+
                 f"{i} ",
                 payload={"action": "poll_rate", "rate": i},
             ))
@@ -319,7 +320,7 @@ async def forward_support(message: Message):
         await bot.api.messages.send(
             peer_id=OPERATOR_PEER_ID,
             message=(
-                f"🆘 Сообщение от участника {message.peer_id}:\n\n"
+                f"Сообщение от участника {message.peer_id}:\n\n"
                 f"{message.text}\n\n"
                 f"─────\n"
                 f"/reply <текст> — ответить\n"

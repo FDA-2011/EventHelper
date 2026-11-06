@@ -1,20 +1,11 @@
-# Python
 __pycache__/
 *.py[cod]
 *.pyo
-
-# Virtual env
 .venv/
 venv/
-
-# IDE
 .idea/
-
-# Secrets & local data
 *.db
 .vkbottle/
-
-# OS
 .DS_Store
 Thumbs.db
 
