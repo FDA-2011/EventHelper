@@ -10,11 +10,7 @@ from database import db
 logger = logging.getLogger(__name__)
 router = BotLabeler()
 router.vbml_ignore_case = True
-
-# peer_id -> {"session_id": ..., "rating": ...}
 PENDING_POLLS: dict[int, dict] = {}
-
-# Админ (peer_id OPERATOR_PEER_ID) -> peer_id последнего обратившегося участника
 LAST_SUPPORT_FROM: dict[int, int] = {}
 
 
@@ -24,11 +20,6 @@ class Feedback(BaseStateGroup):
 
 class Support(BaseStateGroup):
     waiting = "waiting"
-
-
-# ============================================================
-# 3.4 Нетворкинг: /find
-# ============================================================
 @router.message(text=["/find", "/find <query>"])
 async def find(message: Message, query: str = None):
     if not query:
@@ -68,11 +59,6 @@ async def find(message: Message, query: str = None):
             for r in rows
         )
     )
-
-
-# ============================================================
-# 3.4 Опросы: /poll
-# ============================================================
 @router.message(text="/poll")
 async def poll_start(message: Message):
     sessions = db.con.execute(
@@ -124,7 +110,7 @@ async def poll_callback(event: MessageEvent):
         kb = Keyboard(inline=True)
         for i in range(1, 6):
             kb.add(Callback(
-                f"{i} ⭐",
+                f"{i} ",
                 payload={"action": "poll_rate", "rate": i},
             ))
             kb.row()
@@ -177,7 +163,7 @@ async def poll_callback(event: MessageEvent):
 
     await event.show_snackbar(f"Оценка {score} сохранена")
     await event.send_message(
-        f"Оценка: {score} ⭐ сохранена.\n"
+        f"Оценка: {score}  сохранена.\n"
         f"Комментарий (или «-» для пропуска):"
     )
 
@@ -221,16 +207,11 @@ async def poll_comment(message: Message):
             "comment": comment,
         })
 
-    await message.answer("✅ Спасибо за обратную связь!")
-
-
-# ============================================================
-# 3.5 Админ-модуль: рассылка
-# ============================================================
+    await message.answer(" Спасибо за обратную связь!")
 @router.message(text=["/broadcast <text>"])
 async def broadcast(message: Message, text: str = None):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer("⛔ Недостаточно прав.")
+        await message.answer(" Недостаточно прав.")
         return
     if not text:
         await message.answer("Использование: /broadcast <текст>")
@@ -254,7 +235,7 @@ async def broadcast(message: Message, text: str = None):
 @router.message(text=["/emergency <text>"])
 async def emergency(message: Message, text: str = None):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer("⛔ Недостаточно прав.")
+        await message.answer(" Недостаточно прав.")
         return
     if not text:
         await message.answer("Использование: /emergency <текст>")
@@ -276,7 +257,7 @@ async def admin_help(message: Message):
     if message.peer_id not in ADMIN_IDS:
         return
     await message.answer(
-        "👑 Админ-команды:\n\n"
+        " Админ-команды:\n\n"
         "Поддержка:\n"
         "/support_list — активные обращения\n"
         "/reply <текст> — ответить последнему\n"
@@ -289,18 +270,13 @@ async def admin_help(message: Message):
         "• Вопросы на модерации\n"
         "• Карта площадки"
     )
-
-
-# ============================================================
-# 3.6 FAQ и поддержка
-# ============================================================
 @router.message(text="/faq")
 async def faq_list(message: Message):
     rows = db.select("faq")
     if not rows:
         await message.answer("FAQ пока не заполнен.")
         return
-    text = "📚 Частые вопросы:\n\n" + "\n\n".join(
+    text = " Частые вопросы:\n\n" + "\n\n".join(
         f"• {r['question']}: {r['answer']}" for r in rows
     )
     text += "\n\n🆘 Поддержка: /support"
@@ -309,7 +285,6 @@ async def faq_list(message: Message):
 
 @router.message(text="/support")
 async def support_cmd(message: Message):
-    # Админ не входит в режим участника — ему доступны /reply, /answer, /support_list
     if message.peer_id in ADMIN_IDS:
         await message.answer(
             "Вы администратор. Команды поддержки:\n"
@@ -353,7 +328,6 @@ async def forward_support(message: Message):
             ),
             random_id=0,
         )
-        # запоминаем, кто последним писал — для /reply
         LAST_SUPPORT_FROM[OPERATOR_PEER_ID] = message.peer_id
     except Exception as e:
         logger.error("Support forward: %s", e)
@@ -365,9 +339,6 @@ async def forward_support(message: Message):
 async def end_support(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
     await message.answer("Вы вышли из режима поддержки.")
-
-
-# --- Ответы админа участникам ---
 async def _send_reply_to_user(admin_message: Message, target: int, text: str):
     if not text:
         await admin_message.answer("Пустой текст ответа.")
@@ -376,11 +347,11 @@ async def _send_reply_to_user(admin_message: Message, target: int, text: str):
     try:
         await bot.api.messages.send(
             peer_id=target,
-            message=f"💬 Ответ поддержки:\n\n{text}",
+            message=f" Ответ поддержки:\n\n{text}",
             random_id=0,
         )
     except Exception as e:
-        await admin_message.answer(f"⚠️ Не удалось отправить: {e}")
+        await admin_message.answer(f" Не удалось отправить: {e}")
         return
 
     user = db.get_user(target)
@@ -390,7 +361,6 @@ async def _send_reply_to_user(admin_message: Message, target: int, text: str):
             "sender_type": "operator",
             "message_text": text,
         })
-        # помечаем все сообщения этого пользователя прочитанными
         db.con.execute(
             "UPDATE support_messages SET is_read_by_operator = 1 "
             "WHERE user_id = ? AND sender_type = 'user'",
@@ -398,7 +368,7 @@ async def _send_reply_to_user(admin_message: Message, target: int, text: str):
         )
         db.con.commit()
 
-    await admin_message.answer(f"✅ Ответ отправлен участнику {target}.")
+    await admin_message.answer(f" Ответ отправлен участнику {target}.")
 
 
 @router.message(func=lambda m: m.text and m.text.lower().startswith("/reply "))
@@ -443,7 +413,7 @@ async def admin_answer(message: Message):
 @router.message(text="/support_list")
 async def admin_support_list(message: Message):
     if message.peer_id not in ADMIN_IDS:
-        await message.answer("⛔ Недостаточно прав.")
+        await message.answer(" Недостаточно прав.")
         return
 
     rows = db.con.execute(
@@ -462,8 +432,8 @@ async def admin_support_list(message: Message):
         await message.answer("Нет новых сообщений от участников.")
         return
 
-    text = "📬 Активные обращения:\n\n" + "\n\n".join(
-        f"👤 {r['full_name']} (peer_id={r['vk_user_id']}) — {r['unread']} сообщ.\n"
+    text = " Активные обращения:\n\n" + "\n\n".join(
+        f" {r['full_name']} (peer_id={r['vk_user_id']}) — {r['unread']} сообщ.\n"
         f"   Последнее: {r['last_msg'][:80]}"
         for r in rows
     )

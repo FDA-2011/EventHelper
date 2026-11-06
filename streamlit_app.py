@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from helpers import decrypt_text
 
 load_dotenv()
-st.set_page_config(page_title="Админ-панель Бота", page_icon="🛠️", layout="wide")
+st.set_page_config(page_title="Админ-панель Бота", page_icon="", layout="wide")
 
 VK_TOKEN = os.getenv("VK_BOT_TOKEN", "")
 DB_PATH = "bot.db"
@@ -45,37 +45,33 @@ def send_vk_message(user_id: int, text: str):
 ADMIN_PASS = os.getenv("WEB_ADMIN_PASS", "admin")
 
 with st.sidebar:
-    st.title("🛠️ Админ-панель")
+    st.title(" Админ-панель")
     pwd = st.text_input("Введите пароль", type="password")
     if pwd != ADMIN_PASS:
         st.warning("Доступ запрещен.")
         st.stop()
 
-    if st.button("🔄 Обновить данные", use_container_width=True):
+    if st.button(" Обновить данные", use_container_width=True):
         st.rerun()
 
 menu = st.sidebar.radio(
     "Выберите раздел:",
     [
-        "📊 Дашборд",
-        "👥 Пользователи",
-        "❓ Вопросы",
-        "📅 Программа",
-        "🎤 Спикеры",
-        "📍 Локации",
-        "🗺️ Карта",
-        "⭐ Отзывы",
-        "💬 FAQ",
-        "📢 Рассылка",
+        " Дашборд",
+        " Пользователи",
+        " Вопросы",
+        " Программа",
+        " Спикеры",
+        " Локации",
+        " Карта",
+        " Отзывы",
+        " FAQ",
+        " Рассылка",
     ],
 )
 
 conn = get_db()
-
-# ============================================================
-# Дашборд
-# ============================================================
-if menu == "📊 Дашборд":
+if menu == " Дашборд":
     st.header("Общая статистика")
     total_users = conn.execute(
         "SELECT COUNT(*) FROM users WHERE registration_status = 'confirmed'"
@@ -88,16 +84,12 @@ if menu == "📊 Дашборд":
     ).fetchone()[0]
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("✅ Подтвержденные участники", total_users)
+    col1.metric(" Подтвержденные участники", total_users)
     col2.metric("⏳ Ожидают одобрения", pending_users)
-    col3.metric("❓ Вопросов на модерации", total_questions)
-
-# ============================================================
-# Пользователи
-# ============================================================
-elif menu == "👥 Пользователи":
+    col3.metric(" Вопросов на модерации", total_questions)
+elif menu == " Пользователи":
     st.header("Управление пользователями")
-    tab1, tab2 = st.tabs(["⏳ На модерации", "✅ Все участники"])
+    tab1, tab2 = st.tabs(["⏳ На модерации", " Все участники"])
 
     with tab1:
         pending = conn.execute(
@@ -121,7 +113,7 @@ elif menu == "👥 Пользователи":
                         conn.commit()
                         send_vk_message(
                             user["vk_user_id"],
-                            "🎉 Ваша регистрация одобрена! Получите QR-код: /my_qr",
+                            " Ваша регистрация одобрена! Получите QR-код: /my_qr",
                         )
                         st.rerun()
                     if col2.button("Отклонить", key=f"rej_{user['id']}", type="primary"):
@@ -132,7 +124,7 @@ elif menu == "👥 Пользователи":
                         conn.commit()
                         send_vk_message(
                             user["vk_user_id"],
-                            "❌ К сожалению, ваша регистрация отклонена.\n"
+                            " К сожалению, ваша регистрация отклонена.\n"
                             "Если это ошибка — свяжитесь с поддержкой: /support",
                         )
                         st.rerun()
@@ -159,11 +151,7 @@ elif menu == "👥 Пользователи":
         ]
         users = pd.DataFrame(users_data)
         st.dataframe(users, width="stretch")
-
-# ============================================================
-# Вопросы
-# ============================================================
-elif menu == "❓ Вопросы":
+elif menu == " Вопросы":
     st.header("Модерация и ответы на вопросы")
     questions = conn.execute(
         "SELECT q.id, q.question_text, q.is_anonymous, q.user_id, "
@@ -179,11 +167,11 @@ elif menu == "❓ Вопросы":
     else:
         for q in questions:
             with st.container():
-                anon = "🕵️ Анонимно" if q["is_anonymous"] else "👤 Открыто"
+                anon = " Анонимно" if q["is_anonymous"] else " Открыто"
                 st.write(f"**Спикер:** {q['speaker']} | **Режим:** {anon}")
                 st.info(q["question_text"])
 
-                with st.expander("✍️ Ответить пользователю"):
+                with st.expander(" Ответить пользователю"):
                     answer = st.text_area("Текст ответа", key=f"ans_{q['id']}")
                     if st.button("Отправить", key=f"btn_ans_{q['id']}"):
                         if answer:
@@ -205,7 +193,7 @@ elif menu == "❓ Вопросы":
                                 st.success("Ответ отправлен!")
                                 st.rerun()
 
-                if st.button("❌ Отклонить / Скрыть вопрос", key=f"rq_{q['id']}"):
+                if st.button(" Отклонить / Скрыть вопрос", key=f"rq_{q['id']}"):
                     conn.execute(
                         "UPDATE questions SET status = 'rejected' WHERE id = ?",
                         (q["id"],),
@@ -213,11 +201,7 @@ elif menu == "❓ Вопросы":
                     conn.commit()
                     st.rerun()
                 st.divider()
-
-# ============================================================
-# Спикеры
-# ============================================================
-elif menu == "🎤 Спикеры":
+elif menu == " Спикеры":
     st.header("Управление спикерами")
     with st.form("add_speaker"):
         full_name = st.text_input("ФИО спикера")
@@ -235,11 +219,7 @@ elif menu == "🎤 Спикеры":
 
     speakers = pd.read_sql_query("SELECT id, full_name, bio FROM speakers", conn)
     st.dataframe(speakers, width="stretch")
-
-# ============================================================
-# Локации
-# ============================================================
-elif menu == "📍 Локации":
+elif menu == " Локации":
     st.header("Управление локациями (залами)")
     with st.form("add_location"):
         loc_name = st.text_input("Название зала (например, 'Зал А' или 'Коворкинг')")
@@ -257,15 +237,11 @@ elif menu == "📍 Локации":
     st.dataframe(locations, width="stretch")
     if not locations.empty:
         del_loc = st.selectbox("Удалить локацию по ID", locations["id"].tolist())
-        if st.button("🗑️ Удалить локацию"):
+        if st.button(" Удалить локацию"):
             conn.execute("DELETE FROM locations WHERE id = ?", (del_loc,))
             conn.commit()
             st.rerun()
-
-# ============================================================
-# Карта площадки
-# ============================================================
-elif menu == "🗺️ Карта":
+elif menu == " Карта":
     st.header("Карта площадки")
     st.write(
         "Загруженная карта будет показываться пользователям бота по команде `/map`. "
@@ -286,19 +262,15 @@ elif menu == "🗺️ Карта":
     if uploaded is not None:
         with open(VENUE_MAP_PATH, "wb") as f:
             f.write(uploaded.read())
-        st.success("✅ Карта сохранена. Пользователи увидят её при следующем `/map`.")
+        st.success(" Карта сохранена. Пользователи увидят её при следующем `/map`.")
         st.rerun()
 
     if os.path.exists(VENUE_MAP_PATH):
-        if st.button("🗑️ Удалить карту"):
+        if st.button(" Удалить карту"):
             os.remove(VENUE_MAP_PATH)
             st.success("Карта удалена.")
             st.rerun()
-
-# ============================================================
-# Отзывы
-# ============================================================
-elif menu == "⭐ Отзывы":
+elif menu == " Отзывы":
     st.header("Оценки докладов")
     feedbacks = pd.read_sql_query(
         "SELECT f.id, s.title AS session, u.full_name AS user, "
@@ -310,13 +282,9 @@ elif menu == "⭐ Отзывы":
         conn,
     )
     st.dataframe(feedbacks, width="stretch")
-
-# ============================================================
-# Программа
-# ============================================================
-elif menu == "📅 Программа":
+elif menu == " Программа":
     st.header("Управление расписанием")
-    with st.expander("➕ Добавить новый доклад", expanded=False):
+    with st.expander(" Добавить новый доклад", expanded=False):
         speakers = conn.execute("SELECT id, full_name FROM speakers").fetchall()
         speaker_options = {f"{s['full_name']}": s["id"] for s in speakers}
 
@@ -361,15 +329,11 @@ elif menu == "📅 Программа":
         delete_id = st.selectbox(
             "Выберите ID доклада для удаления", sessions["id"].tolist()
         )
-        if st.button("🗑️ Удалить доклад"):
+        if st.button(" Удалить доклад"):
             conn.execute("DELETE FROM sessions WHERE id = ?", (delete_id,))
             conn.commit()
             st.rerun()
-
-# ============================================================
-# FAQ
-# ============================================================
-elif menu == "💬 FAQ":
+elif menu == " FAQ":
     st.header("Частые вопросы")
     with st.form("add_faq"):
         q = st.text_input("Вопрос")
@@ -385,18 +349,14 @@ elif menu == "💬 FAQ":
     st.dataframe(faqs, width="stretch")
     if not faqs.empty:
         del_id = st.selectbox("Удалить по ID", faqs["id"].tolist())
-        if st.button("🗑️ Удалить FAQ"):
+        if st.button(" Удалить FAQ"):
             conn.execute("DELETE FROM faq WHERE id = ?", (del_id,))
             conn.commit()
             st.rerun()
-
-# ============================================================
-# Рассылка
-# ============================================================
-elif menu == "📢 Рассылка":
+elif menu == " Рассылка":
     st.header("Массовая рассылка")
     text = st.text_area("Текст сообщения", height=150)
-    if st.button("🚀 Отправить всем", type="primary"):
+    if st.button(" Отправить всем", type="primary"):
         if text:
             users = conn.execute(
                 "SELECT vk_user_id FROM users WHERE registration_status = 'confirmed'"
@@ -409,6 +369,6 @@ elif menu == "📢 Рассылка":
                     if ok:
                         success += 1
                     progress.progress((i + 1) / len(users))
-                st.success(f"✅ Отправлено {success} из {len(users)}")
+                st.success(f" Отправлено {success} из {len(users)}")
 
 conn.close()

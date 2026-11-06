@@ -16,19 +16,12 @@ router = BotLabeler()
 router.vbml_ignore_case = True
 
 PENDING_QUESTIONS: dict[int, dict] = {}
-
-# Путь к сохранённой карте площадки (загружается через Streamlit-админку)
 VENUE_MAP_PATH = "venue_map.jpg"
 
 
 class AskForm(BaseStateGroup):
     speaker = "speaker"
     question = "question"
-
-
-# ============================================================
-# 3.2 Программа и поиск
-# ============================================================
 @router.message(text="/program")
 async def show_program(message: Message):
     rows = db.con.execute(
@@ -47,9 +40,9 @@ async def show_program(message: Message):
     for r in rows:
         halls.setdefault(r["hall"] or "—", []).append(dict(r))
 
-    lines = ["📅 Программа форума\n"]
+    lines = [" Программа форума\n"]
     for hall, sessions in halls.items():
-        lines.append(f"🏛️ {hall}")
+        lines.append(f" {hall}")
         for s in sessions:
             start = s["start_time"].split(" ")[1][:5] if " " in s["start_time"] else s["start_time"]
             end = s["end_time"].split(" ")[1][:5] if " " in s["end_time"] else s["end_time"]
@@ -93,7 +86,7 @@ async def search(message: Message, query: str = None):
             return
 
         await message.answer(
-            "🔍 Результаты:\n" + "\n".join(
+            " Результаты:\n" + "\n".join(
                 f"• {r['title']} — {r['speaker'] or 'Нет спикера'} "
                 f"({r['start_time'].split(' ')[1][:5] if ' ' in r['start_time'] else r['start_time']}, "
                 f"{r['hall'] or 'Зал не указан'})"
@@ -102,7 +95,7 @@ async def search(message: Message, query: str = None):
         )
     except Exception as e:
         print(f"Ошибка поиска: {e}")
-        await message.answer("⚠️ Ошибка при поиске докладов.")
+        await message.answer(" Ошибка при поиске докладов.")
 
 
 @router.message(text="/my_schedule")
@@ -155,17 +148,12 @@ async def my_schedule(message: Message):
         doc = await uploader.upload(buf, peer_id=message.peer_id, title="my_schedule.ics")
         await message.answer(message="Ваше расписание (.ics)", attachment=doc)
     except Exception as e:
-        await message.answer(f"⚠️ Не удалось сформировать .ics: {e}")
-
-
-# ============================================================
-# 3.2 Карта площадки
-# ============================================================
+        await message.answer(f" Не удалось сформировать .ics: {e}")
 @router.message(text="/map")
 async def show_map(message: Message):
     if not os.path.exists(VENUE_MAP_PATH):
         await message.answer(
-            "🗺️ Карта площадки ещё не загружена администратором."
+            " Карта площадки ещё не загружена администратором."
         )
         return
 
@@ -175,14 +163,9 @@ async def show_map(message: Message):
         buf.name = "map.jpg"
         uploader = PhotoMessageUploader(bot.api)
         photo = await uploader.upload(buf, peer_id=message.peer_id)
-        await message.answer(message="🗺️ Карта площадки", attachment=photo)
+        await message.answer(message=" Карта площадки", attachment=photo)
     except Exception as e:
-        await message.answer(f"⚠️ Не удалось отправить карту: {e}")
-
-
-# ============================================================
-# 3.3 Спикеры и вопросы
-# ============================================================
+        await message.answer(f" Не удалось отправить карту: {e}")
 @router.message(text=["/speaker", "/speaker <query>"])
 async def speaker_profile(message: Message, query: str = None):
     if not query:
@@ -198,8 +181,8 @@ async def speaker_profile(message: Message, query: str = None):
         return
     s = rows[0]
     await message.answer(
-        f"👤 {s['full_name']}\n\n📖 {s.get('bio') or '—'}\n\n"
-        f"🔗 Соцсети: {s.get('social_links') or '—'}"
+        f" {s['full_name']}\n\n {s.get('bio') or '—'}\n\n"
+        f" Соцсети: {s.get('social_links') or '—'}"
     )
 
 
@@ -287,5 +270,5 @@ async def handle_anonymity_callback(event: MessageEvent):
         "status": "pending",
     })
 
-    confirm_text = "✅ Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
+    confirm_text = " Вопрос отправлен на модерацию" + (" анонимно." if is_anon else ".")
     await event.send_message(confirm_text)

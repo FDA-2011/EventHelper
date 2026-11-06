@@ -1,11 +1,12 @@
 from vkbottle.bot import Message, BotLabeler
 from vkbottle import (
-    BaseStateGroup, PhotoMessageUploader,
+    BaseStateGroup, PhotoMessageUploader, Keyboard, Text,
     GroupEventType, GroupTypes,
 )
 
 from bot_instance import bot
 from database import db
+from config import ADMIN_IDS
 from helpers import (
     validate_email,
     validate_phone,
@@ -16,8 +17,155 @@ from helpers import (
 
 router = BotLabeler()
 router.vbml_ignore_case = True
+FULL_ACCESS_STATUSES = {"confirmed"}
+PENDING_ALLOWED = {
+    "/my_qr", "/cancel_reg", "/help", "/start", "/register", "/cancel",
+}
+ADMIN_ALLOWED = {
+    "/broadcast", "/emergency", "/support_list", "/reply", "/answer",
+    "/admin_help", "/start", "/help", "/cancel",
+}
 
 
+def _is_admin(peer_id: int) -> bool:
+    return peer_id in ADMIN_IDS
+
+
+def _user_status(peer_id: int) -> str | None:
+    user = db.get_user(peer_id)
+    return user.get("registration_status") if user else None
+
+
+def _block_matcher(m: Message) -> bool:
+    """True  блокировать, False  пропустить."""
+    peer_id = m.peer_id
+    status = _user_status(peer_id)
+    if status in FULL_ACCESS_STATUSES:
+        return False
+
+    text = (m.text or "").strip()
+    text_lower = text.lower()
+    cmd = text_lower.split(maxsplit=1)[0] if text_lower else ""
+    if cmd == "/register" or text_lower == "/cancel":
+        return False
+    if _is_admin(peer_id) and cmd in ADMIN_ALLOWED:
+        return False
+    if status == "pending" and cmd in PENDING_ALLOWED:
+        return False
+    state_peer = getattr(m, "state_peer", None)
+    if state_peer and getattr(state_peer, "state", None):
+        if not text.startswith("/"):
+            return False
+
+    return True
+
+
+@router.message(func=_block_matcher)
+async def block_unregistered(message: Message):
+    status = _user_status(message.peer_id)
+
+    if status == "pending":
+        kb = Keyboard(one_time=False)
+        kb.add(Text("/my_qr")).add(Text("/cancel_reg"))
+        await message.answer(
+            "⏳ Ваша заявка на регистрацию ещё на рассмотрении.\n\n"
+            "Доступные команды:\n"
+            " /my_qr — статус заявки\n"
+            " /cancel_reg — отменить заявку\n"
+            " /help — помощь",
+            keyboard=kb.get_json(),
+        )
+        return
+
+    kb = Keyboard(one_time=False).add(Text("/register"))
+    await message.answer(
+        " Для использования бота пройдите регистрацию.\n\n"
+        "Отправьте /register или нажмите кнопку ниже.",
+        keyboard=kb.get_json(),
+    )
+HELP_TEXT = (
+    " Все команды бота:\n\n"
+    " /program — программа форума\n"
+    " /my_schedule — расписание в календарь (.ics)\n"
+    " /search <слово> — поиск докладов\n"
+    " /speaker <ФИО> — профиль спикера\n"
+    " /map — карта площадки\n"
+    " /poll — оценить доклад\n"
+    " /ask — задать вопрос спикеру\n"
+    " /find <запрос> — поиск участников\n"
+    " /my_qr — QR-код бейджа\n"
+    " /support — связаться с оператором\n"
+    " /edit_reg — изменить данные\n"
+    " /cancel_reg — отменить заявку\n\n"
+    "Команды с < > — введите аргумент через пробел.\n"
+    "Или нажмите кнопку ниже — команда выполнится сама."
+)
+
+HELP_TEXT_PENDING = (
+    "⏳ Ваша заявка на регистрацию на рассмотрении администратора.\n\n"
+    "Доступные команды:\n"
+    " /my_qr — статус заявки\n"
+    " /cancel_reg — отменить заявку\n"
+    " /help — это сообщение\n"
+    " /start — главное меню\n\n"
+    "Остальные команды откроются после одобрения."
+)
+
+
+def _help_keyboard() -> str:
+    kb = Keyboard(one_time=False)
+    kb.add(Text("/program")).add(Text("/my_schedule")).row()
+    kb.add(Text("/search")).add(Text("/speaker")).row()
+    kb.add(Text("/map")).add(Text("/poll")).row()
+    kb.add(Text("/ask")).add(Text("/find")).row()
+    kb.add(Text("/my_qr")).add(Text("/support")).row()
+    kb.add(Text("/edit_reg")).add(Text("/cancel_reg"))
+    return kb.get_json()
+
+
+def _pending_keyboard() -> str:
+    kb = Keyboard(one_time=False)
+    kb.add(Text("/my_qr")).add(Text("/cancel_reg"))
+    return kb.get_json()
+@router.message(text=["/start", "начать"])
+async def cmd_start(message: Message):
+    status = _user_status(message.peer_id)
+
+    if status == "pending":
+        await message.answer(HELP_TEXT_PENDING, keyboard=_pending_keyboard())
+        return
+
+    if status == "confirmed":
+        await message.answer(HELP_TEXT, keyboard=_help_keyboard())
+        return
+    kb = Keyboard(one_time=False).add(Text("/register"))
+    await message.answer(
+        " Для использования бота пройдите регистрацию.",
+        keyboard=kb.get_json(),
+    )
+
+
+@router.message(text=["/help", "help", "помощь"])
+async def cmd_help(message: Message):
+    status = _user_status(message.peer_id)
+
+    if status == "pending":
+        await message.answer(HELP_TEXT_PENDING, keyboard=_pending_keyboard())
+        return
+
+    if status == "confirmed":
+        await message.answer(HELP_TEXT, keyboard=_help_keyboard())
+        return
+
+    kb = Keyboard(one_time=False).add(Text("/register"))
+    await message.answer(
+        " Для использования бота пройдите регистрацию.",
+        keyboard=kb.get_json(),
+    )
+@router.message(text="/cancel")
+async def cancel_state(message: Message):
+    await bot.state_dispenser.delete(message.peer_id)
+    await message.answer("Действие отменено. Список команд: /help")
 class RegForm(BaseStateGroup):
     full_name = "full_name"
     organization = "organization"
@@ -33,43 +181,37 @@ async def on_group_join(event: GroupTypes.GroupJoin):
     await bot.api.messages.send(
         peer_id=event.object.user_id,
         message=(
-            "Добро пожаловать на форум! 👋\n"
-            "Я помогу с регистрацией, программой, вопросами спикерам и поддержкой.\n"
-            "Начните с /register или /start."
+            "Добро пожаловать на форум! \n\n"
+            " Для использования бота нужна регистрация.\n"
+            "Пройдите её командой /register."
         ),
         random_id=0,
     )
 
 
-@router.message(text=["/start", "начать"])
-async def cmd_start(message: Message):
-    await message.answer(
-        "Команды:\n"
-        "/register — регистрация\n"
-        "/program — программа\n"
-        "/search — поиск докладов\n"
-        "/my_schedule — экспорт в календарь\n"
-        "/map — карта площадки\n"
-        "/speaker — профиль спикера\n"
-        "/ask — вопрос спикеру\n"
-        "/find — поиск участников\n"
-        "/poll — оценка доклада\n"
-        "/my_qr — получить QR-код бейджа\n"
-        "/support — написать в чат с поддержкой\n"
-        "/edit_reg — изменить данные"
-    )
-
-
 @router.message(text="/register")
 async def reg_start(message: Message):
-    # Сбросим прошлую заявку, если была — начинаем с чистого листа
     existing = db.get_user(message.peer_id)
-    if existing and existing.get("registration_status") == "confirmed":
-        await message.answer(
-            "Вы уже зарегистрированы. Чтобы получить QR-код — /my_qr.\n"
-            "Для изменения данных — /edit_reg."
-        )
-        return
+
+    if existing:
+        status = existing.get("registration_status")
+
+        if status == "confirmed":
+            await message.answer(
+                " Вы уже зарегистрированы.\n\n"
+                " Получить QR-код: /my_qr\n"
+                " Изменить данные: /edit_reg"
+            )
+            return
+
+        if status == "pending":
+            await message.answer(
+                "⏳ Ваша заявка уже на рассмотрении.\n\n"
+                " Статус: /my_qr\n"
+                " Отменить: /cancel_reg\n"
+                " Изменить данные: /edit_reg"
+            )
+            return
 
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)
     await message.answer("Введите ваше ФИО:")
@@ -167,8 +309,8 @@ async def reg_phone(message: Message):
     await bot.state_dispenser.set(message.peer_id, RegForm.confirm, **data)
     await message.answer(
         "Проверьте данные:\n"
-        f"👤 {data['full_name']}\n🏢 {data['organization']}\n🌍 {data['region']}\n"
-        f"💼 {data['position']}\n📧 {data['email']}\n📞 {data['phone']}\n\n"
+        f" {data['full_name']}\n {data['organization']}\n {data['region']}\n"
+        f" {data['position']}\n {data['email']}\n {data['phone']}\n\n"
         "Всё верно? Отправьте «да» или /register для отмены."
     )
 
@@ -183,19 +325,34 @@ async def reg_confirm(message: Message):
         await message.answer("Регистрация отменена. /register — начать заново.")
         return
 
+    current = db.get_user(message.peer_id)
+    if current:
+        status = current.get("registration_status")
+        if status == "confirmed":
+            await bot.state_dispenser.delete(message.peer_id)
+            await message.answer(
+                "ℹ Ваша регистрация уже подтверждена ранее.\n\n"
+                " Получить QR-код: /my_qr"
+            )
+            return
+        if status == "pending":
+            await bot.state_dispenser.delete(message.peer_id)
+            await message.answer(
+                "⏳ Заявка уже на рассмотрении.\n"
+                "Дождитесь решения администратора."
+            )
+            return
+
     data = message.state_peer.payload
     await bot.state_dispenser.delete(message.peer_id)
 
-    # В CRM уходит plaintext
     crm_id = crm_register(data)
     if not crm_id:
-        await message.answer("⚠️ Не удалось связаться с CRM.")
+        await message.answer(" Не удалось связаться с CRM.")
         return
 
     qr_data = f"BADGE:{crm_id}:{data['full_name']}"
 
-    # Заявка сохраняется со статусом pending — ждёт одобрения админа.
-    # QR-код пока не отправляем, только сохраняем в qr_code_data.
     db.upsert_user(message.peer_id, {
         "full_name": data["full_name"],
         "organization": data["organization"],
@@ -208,14 +365,12 @@ async def reg_confirm(message: Message):
     })
 
     await message.answer(
-        "📝 Заявка на регистрацию отправлена!\n\n"
+        " Заявка на регистрацию отправлена!\n\n"
         "Она поступила на рассмотрение администратора. "
-        "После одобрения вы получите уведомление в этом чате.\n\n"
-        "Чтобы получить QR-код бейджа после одобрения, отправьте /my_qr.\n"
+        "После одобрения вам станут доступны все команды бота.\n\n"
+        " Проверить статус: /my_qr\n"
         f"Номер заявки: {crm_id}"
     )
-
-
 @router.message(text="/my_qr")
 async def my_qr(message: Message):
     user = db.get_user(message.peer_id)
@@ -229,15 +384,15 @@ async def my_qr(message: Message):
 
     if status == "pending":
         await message.answer(
-            "⏳ Ваша заявка ещё на рассмотрении администратора.\n"
-            "Мы уведомим вас, когда она будет одобрена."
+            "⏳ Ваша заявка ещё на рассмотрении.\n"
+            "Мы уведомим вас, когда её одобрят."
         )
         return
 
     if status == "cancelled":
         await message.answer(
-            "❌ Ваша заявка отклонена.\n"
-            "Вы можете пройти регистрацию заново: /register"
+            " Ваша заявка отменена или отклонена.\n"
+            "Пройти регистрацию заново: /register"
         )
         return
 
@@ -245,7 +400,7 @@ async def my_qr(message: Message):
         qr_data = user.get("qr_code_data")
         if not qr_data:
             await message.answer(
-                "⚠️ QR-код не найден. Обратитесь к администратору."
+                " QR-код не найден. Обратитесь к администратору."
             )
             return
 
@@ -254,36 +409,60 @@ async def my_qr(message: Message):
             uploader = PhotoMessageUploader(bot.api)
             photo = await uploader.upload(qr_buf, peer_id=message.peer_id)
             await message.answer(
-                message="🎫 Ваш QR-код для бейджа:",
+                message=" Ваш QR-код для бейджа:",
                 attachment=photo,
             )
         except Exception as e:
-            await message.answer(f"⚠️ Не удалось сформировать QR: {e}")
+            await message.answer(f" Не удалось сформировать QR: {e}")
         return
 
     await message.answer(
         "Не удалось определить статус регистрации. Обратитесь к администратору."
     )
-
-
 @router.message(text="/cancel_reg")
 async def cancel_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
+
     user = db.get_user(message.peer_id)
-    if user:
-        db.update("users", {"registration_status": "cancelled"}, {"id": user["id"]})
-    await message.answer("Регистрация отменена.")
+    if not user:
+        await message.answer("У вас нет активной заявки.")
+        return
 
+    status = user.get("registration_status")
 
+    if status == "cancelled":
+        await message.answer(
+            "Заявка уже отменена.\nПройти регистрацию заново: /register"
+        )
+        return
+
+    db.update("users", {"registration_status": "cancelled"}, {"id": user["id"]})
+    await message.answer(" Заявка отменена.\n\nПройти заново: /register")
 @router.message(text="/edit_reg")
 async def edit_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
+
     user = db.get_user(message.peer_id)
-    if user and user.get("registration_status") == "confirmed":
+    if not user:
         await message.answer(
-            "Вы уже подтверждены. Изменение данных потребует повторного одобрения.\n"
-            "Введите новые ФИО (или /cancel_reg для отмены):"
+            "Вы ещё не регистрировались.\nНачать: /register"
+        )
+        return
+
+    status = user.get("registration_status")
+
+    if status == "confirmed":
+        await message.answer(
+            " Изменение данных подтверждённой регистрации.\n"
+            "После заполнения заявка снова уйдёт на модерацию.\n\n"
+            "Введите новые ФИО:"
+        )
+    elif status == "pending":
+        await message.answer(
+            " Изменение заявки на модерации.\n\n"
+            "Введите новые ФИО:"
         )
     else:
         await message.answer("Введите новые ФИО:")
+
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)

@@ -12,14 +12,7 @@ from cryptography.fernet import Fernet
 from config import CRM_API_URL, CRM_API_KEY, FERNET_KEY
 
 logger = logging.getLogger(__name__)
-
-# Файл с ключом (используется, если FERNET_KEY не задан в .env)
 _KEY_FILE = "secret.key"
-
-
-# ============================================================
-# Шифрование email / телефона
-# ============================================================
 def _load_fernet() -> Fernet:
     """Возвращает Fernet с одним и тем же ключом для бота и админки."""
     if FERNET_KEY:
@@ -57,11 +50,6 @@ def decrypt_text(token: str | None) -> str | None:
         return _fernet.decrypt(token.encode("utf-8")).decode("utf-8")
     except Exception:
         return token
-
-
-# ============================================================
-# Валидаторы
-# ============================================================
 def validate_email(email: str) -> bool:
     return re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", email) is not None
 
@@ -69,11 +57,6 @@ def validate_email(email: str) -> bool:
 def validate_phone(phone: str) -> bool:
     cleaned = re.sub(r"[^\d+]", "", phone)
     return 10 <= len(cleaned) <= 15
-
-
-# ============================================================
-# QR-код
-# ============================================================
 def generate_qr(data: str) -> io.BytesIO:
     print(f"⏳ [helpers] Начинаю генерацию QR для данных: {data}")
     qr = qrcode.make(data)
@@ -81,13 +64,8 @@ def generate_qr(data: str) -> io.BytesIO:
     qr.save(buf)
     buf.name = "qr.png"
     buf.seek(0)
-    print("✅ [helpers] QR успешно сгенерирован в памяти")
+    print(" [helpers] QR успешно сгенерирован в памяти")
     return buf
-
-
-# ============================================================
-# .ics-экспорт
-# ============================================================
 def build_ics(sessions: list[dict], date_str: str = "20261105") -> io.BytesIO:
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//VK Forum Bot//RU"]
     for s in sessions:
@@ -107,11 +85,6 @@ def build_ics(sessions: list[dict], date_str: str = "20261105") -> io.BytesIO:
     buf = io.BytesIO("\r\n".join(lines).encode("utf-8"))
     buf.name = "my_schedule.ics"
     return buf
-
-
-# ============================================================
-# CRM (заглушка)
-# ============================================================
 def crm_register(data: dict) -> str | None:
     try:
         try:

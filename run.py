@@ -11,5 +11,5 @@ bot.labeler.load(content.router)
 bot.labeler.load(community.router)
 
 if __name__ == "__main__":
-    print("🚀 Бот запускается...")
+    print(" Бот запускается...")
     bot.run()
