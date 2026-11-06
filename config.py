@@ -10,6 +10,10 @@ ADMIN_IDS = {int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().
 CRM_API_URL = os.getenv("CRM_API_URL", "")
 CRM_API_KEY = os.getenv("CRM_API_KEY", "")
 
+# Ключ шифрования для email/телефона (Fernet, base64).
+# Если не задан — генерируется автоматически в secret.key при первом запуске.
+FERNET_KEY = os.getenv("FERNET_KEY", "")
+
 VENUE_POIS = {
     "вход":     (37.6160, 55.7545),
     "гардероб": (37.6165, 55.7550),

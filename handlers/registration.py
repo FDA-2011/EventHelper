@@ -6,7 +6,13 @@ from vkbottle import (
 
 from bot_instance import bot
 from database import db
-from helpers import validate_email, validate_phone, generate_qr, crm_register
+from helpers import (
+    validate_email,
+    validate_phone,
+    generate_qr,
+    crm_register,
+    encrypt_text,
+)
 
 router = BotLabeler()
 router.vbml_ignore_case = True
@@ -40,7 +46,6 @@ async def cmd_start(message: Message):
     await message.answer(
         "Команды:\n"
         "/register — регистрация\n"
-        "/cancel — отменить действие\n"
         "/program — программа\n"
         "/search — поиск докладов\n"
         "/my_schedule — экспорт в календарь\n"
@@ -49,7 +54,7 @@ async def cmd_start(message: Message):
         "/ask — вопрос спикеру\n"
         "/find — поиск участников\n"
         "/poll — оценка доклада\n"
-        "/my_qr — получить QR-код\n"
+        "/my_qr — получить QR-код бейджа\n"
         "/support — написать в чат с поддержкой\n"
         "/edit_reg — изменить данные"
     )
@@ -57,6 +62,15 @@ async def cmd_start(message: Message):
 
 @router.message(text="/register")
 async def reg_start(message: Message):
+    # Сбросим прошлую заявку, если была — начинаем с чистого листа
+    existing = db.get_user(message.peer_id)
+    if existing and existing.get("registration_status") == "confirmed":
+        await message.answer(
+            "Вы уже зарегистрированы. Чтобы получить QR-код — /my_qr.\n"
+            "Для изменения данных — /edit_reg."
+        )
+        return
+
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)
     await message.answer("Введите ваше ФИО:")
 
@@ -172,6 +186,7 @@ async def reg_confirm(message: Message):
     data = message.state_peer.payload
     await bot.state_dispenser.delete(message.peer_id)
 
+    # В CRM уходит plaintext
     crm_id = crm_register(data)
     if not crm_id:
         await message.answer("⚠️ Не удалось связаться с CRM.")
@@ -179,23 +194,75 @@ async def reg_confirm(message: Message):
 
     qr_data = f"BADGE:{crm_id}:{data['full_name']}"
 
+    # Заявка сохраняется со статусом pending — ждёт одобрения админа.
+    # QR-код пока не отправляем, только сохраняем в qr_code_data.
     db.upsert_user(message.peer_id, {
         "full_name": data["full_name"],
         "organization": data["organization"],
         "region": data["region"],
         "position": data["position"],
-        "email": data["email"],
-        "phone": data["phone"],
+        "email": encrypt_text(data["email"]),
+        "phone": encrypt_text(data["phone"]),
         "qr_code_data": qr_data,
-        "registration_status": "confirmed",
+        "registration_status": "pending",
     })
 
-    qr_buf = generate_qr(qr_data)
-    uploader = PhotoMessageUploader(bot.api)
-    photo = await uploader.upload(qr_buf, peer_id=message.peer_id)
     await message.answer(
-        message=f"✅ Регистрация подтверждена!\nQR-код бейджа во вложении.\nID: {crm_id}",
-        attachment=photo,
+        "📝 Заявка на регистрацию отправлена!\n\n"
+        "Она поступила на рассмотрение администратора. "
+        "После одобрения вы получите уведомление в этом чате.\n\n"
+        "Чтобы получить QR-код бейджа после одобрения, отправьте /my_qr.\n"
+        f"Номер заявки: {crm_id}"
+    )
+
+
+@router.message(text="/my_qr")
+async def my_qr(message: Message):
+    user = db.get_user(message.peer_id)
+    if not user:
+        await message.answer(
+            "Вы ещё не регистрировались.\nПройдите регистрацию: /register"
+        )
+        return
+
+    status = user.get("registration_status")
+
+    if status == "pending":
+        await message.answer(
+            "⏳ Ваша заявка ещё на рассмотрении администратора.\n"
+            "Мы уведомим вас, когда она будет одобрена."
+        )
+        return
+
+    if status == "cancelled":
+        await message.answer(
+            "❌ Ваша заявка отклонена.\n"
+            "Вы можете пройти регистрацию заново: /register"
+        )
+        return
+
+    if status == "confirmed":
+        qr_data = user.get("qr_code_data")
+        if not qr_data:
+            await message.answer(
+                "⚠️ QR-код не найден. Обратитесь к администратору."
+            )
+            return
+
+        try:
+            qr_buf = generate_qr(qr_data)
+            uploader = PhotoMessageUploader(bot.api)
+            photo = await uploader.upload(qr_buf, peer_id=message.peer_id)
+            await message.answer(
+                message="🎫 Ваш QR-код для бейджа:",
+                attachment=photo,
+            )
+        except Exception as e:
+            await message.answer(f"⚠️ Не удалось сформировать QR: {e}")
+        return
+
+    await message.answer(
+        "Не удалось определить статус регистрации. Обратитесь к администратору."
     )
 
 
@@ -211,5 +278,12 @@ async def cancel_reg(message: Message):
 @router.message(text="/edit_reg")
 async def edit_reg(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
+    user = db.get_user(message.peer_id)
+    if user and user.get("registration_status") == "confirmed":
+        await message.answer(
+            "Вы уже подтверждены. Изменение данных потребует повторного одобрения.\n"
+            "Введите новые ФИО (или /cancel_reg для отмены):"
+        )
+    else:
+        await message.answer("Введите новые ФИО:")
     await bot.state_dispenser.set(message.peer_id, RegForm.full_name)
-    await message.answer("Введите новые ФИО:")

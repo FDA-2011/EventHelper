@@ -5,6 +5,8 @@ import requests
 import os
 from dotenv import load_dotenv
 
+from helpers import decrypt_text
+
 load_dotenv()
 st.set_page_config(page_title="Админ-панель Бота", page_icon="🛠️", layout="wide")
 
@@ -107,7 +109,9 @@ elif menu == "👥 Пользователи":
             for user in pending:
                 with st.container():
                     st.write(f"**{user['full_name']}** ({user['organization']})")
-                    st.write(f"Email: {user['email']} | Тел: {user['phone']}")
+                    email = decrypt_text(user["email"]) or "—"
+                    phone = decrypt_text(user["phone"]) or "—"
+                    st.write(f"Email: {email} | Тел: {phone}")
                     col1, col2 = st.columns([1, 10])
                     if col1.button("Одобрить", key=f"app_{user['id']}"):
                         conn.execute(
@@ -126,15 +130,34 @@ elif menu == "👥 Пользователи":
                             (user["id"],),
                         )
                         conn.commit()
+                        send_vk_message(
+                            user["vk_user_id"],
+                            "❌ К сожалению, ваша регистрация отклонена.\n"
+                            "Если это ошибка — свяжитесь с поддержкой: /support",
+                        )
                         st.rerun()
                     st.divider()
 
     with tab2:
-        users = pd.read_sql_query(
-            "SELECT id, vk_user_id, full_name, organization, registration_status "
-            "FROM users ORDER BY full_name",
-            conn,
-        )
+        rows = conn.execute(
+            "SELECT id, vk_user_id, full_name, organization, email, phone, "
+            "       registration_status "
+            "FROM users ORDER BY full_name"
+        ).fetchall()
+
+        users_data = [
+            {
+                "id": r["id"],
+                "vk_user_id": r["vk_user_id"],
+                "full_name": r["full_name"],
+                "organization": r["organization"],
+                "email": decrypt_text(r["email"]) or "—",
+                "phone": decrypt_text(r["phone"]) or "—",
+                "registration_status": r["registration_status"],
+            }
+            for r in rows
+        ]
+        users = pd.DataFrame(users_data)
         st.dataframe(users, width="stretch")
 
 # ============================================================
@@ -240,7 +263,7 @@ elif menu == "📍 Локации":
             st.rerun()
 
 # ============================================================
-# Карта площадки (загрузка/замена/удаление)
+# Карта площадки
 # ============================================================
 elif menu == "🗺️ Карта":
     st.header("Карта площадки")
