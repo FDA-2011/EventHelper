@@ -145,7 +145,7 @@ python run.py
 **Терминал № 2 — запуск административной панели:**
 
 ```bash
-streamlit run streamlit_app.py
+python -m streamlit run streamlit_app.py
 ```
 
 После запуска админ-панель будет доступна в браузере по адресу:
