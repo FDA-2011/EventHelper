@@ -126,7 +126,7 @@ def _help_keyboard() -> str:
 
 def _pending_keyboard() -> str:
     kb = Keyboard(one_time=False)
-    kb.add(Text("/my_qr")))
+    kb.add(Text("/my_qr"))
     return kb.get_json()
 
 
